@@ -205,33 +205,6 @@ export function AuthModal({ isOpen, onClose, initialMode = "LOGIN" }: AuthModalP
             )}
           </button>
         </form>
-
-        {/* Demo Quick Accounts */}
-        <div className="pt-3 border-t border-slate-100 text-center">
-          <p className="text-[11px] text-slate-400 mb-2">หรือคลิกเลือกบัญชีทดสอบด่วน (Quick Test Accounts):</p>
-          <div className="flex justify-center gap-2 text-[10px]">
-            <button
-              type="button"
-              onClick={() => {
-                setEmail("admin@equipflow.local");
-                setPassword("Diwooo1661@");
-              }}
-              className="px-2.5 py-1 rounded-lg bg-slate-100 hover:bg-emerald-50 text-slate-600 hover:text-emerald-700 font-mono transition"
-            >
-              Admin Demo
-            </button>
-            <button
-              type="button"
-              onClick={() => {
-                setEmail("employee@equipflow.local");
-                setPassword("Diwooo1661@");
-              }}
-              className="px-2.5 py-1 rounded-lg bg-slate-100 hover:bg-emerald-50 text-slate-600 hover:text-emerald-700 font-mono transition"
-            >
-              Employee Demo
-            </button>
-          </div>
-        </div>
       </div>
     </div>
   );

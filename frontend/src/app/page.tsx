@@ -2,7 +2,7 @@
 
 import React, { useState, useEffect } from "react";
 import Link from "next/link";
-import { useSearchParams } from "next/navigation";
+import { useSearchParams, useRouter } from "next/navigation";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { apiClient } from "@/lib/api";
 import { Asset, BorrowRequest, Profile, UserRole, ConditionStatus } from "@/types";
@@ -41,19 +41,37 @@ import { AuthModal } from "@/components/auth-modal";
 import { Suspense } from "react";
 
 function DashboardContent() {
+  const router = useRouter();
   const searchParams = useSearchParams();
   const queryClient = useQueryClient();
-  const { user, role, switchRole, signOut } = useAuth();
+  const { user, role, switchRole, signOut, isAuthenticated, isLoading: isAuthLoading } = useAuth();
 
   const [activeTab, setActiveTab] = useState<"dashboard" | "assets" | "requests" | "admin" | "audit" | "users">("dashboard");
 
-  // Sync tab from URL query (?tab=users, ?tab=admin, etc.)
+  // 1. Strict Auth Protection: ถ้ายังไม่ได้ Login ให้ Redirect ไปหน้า /login ทันที
+  useEffect(() => {
+    if (!isAuthLoading && !isAuthenticated && !user) {
+      router.replace("/login");
+    }
+  }, [isAuthLoading, isAuthenticated, user, router]);
+
+  // 2. Role-Based Permission Guard สำหรับ URL Tab (?tab=admin, ?tab=users)
   useEffect(() => {
     const tabParam = searchParams.get("tab");
     if (tabParam && ["dashboard", "assets", "requests", "admin", "audit", "users"].includes(tabParam)) {
+      // บล็อกไม่ให้ Employee เข้าแท็บ admin, audit, users
+      if ((tabParam === "admin" || tabParam === "audit") && role === "EMPLOYEE") {
+        setActiveTab("assets");
+        return;
+      }
+      // บล็อกไม่ให้ผู้ที่มิใช่ Super Admin เข้าแท็บ users
+      if (tabParam === "users" && role !== "SUPER_ADMIN") {
+        setActiveTab(role === "IT_ADMIN" ? "admin" : "assets");
+        return;
+      }
       setActiveTab(tabParam as any);
     }
-  }, [searchParams]);
+  }, [searchParams, role]);
 
   const [search, setSearch] = useState("");
   
@@ -135,26 +153,7 @@ function DashboardContent() {
         const res = await apiClient.get("/users");
         return res.data;
       } catch {
-        return {
-          data: [
-            {
-              id: "11111111-1111-1111-1111-111111111111",
-              email: "admin@equipflow.local",
-              full_name: "Super Administrator",
-              role: "SUPER_ADMIN",
-              is_active: true,
-              created_at: new Date().toISOString(),
-            },
-            {
-              id: "22222222-2222-2222-2222-222222222222",
-              email: "employee@equipflow.local",
-              full_name: "John Doe (Employee)",
-              role: "EMPLOYEE",
-              is_active: true,
-              created_at: new Date().toISOString(),
-            },
-          ],
-        };
+        return { data: [] };
       }
     },
     retry: false,
@@ -271,15 +270,15 @@ function DashboardContent() {
   const borrowedCount = allAssets.filter((a) => a.status === "BORROWED").length;
   const maintenanceCount = allAssets.filter((a) => a.status === "MAINTENANCE").length;
   const pendingCount = allRequests.filter((r) => r.status === "PENDING").length;
-  const utilization = totalAssetsCount > 0 ? (borrowedCount / (totalAssetsCount || 1)) * 100 : 0;
+  const utilization = totalAssetsCount > 0 ? (borrowedCount / totalAssetsCount) * 100 : 0;
 
   const kpis = analyticsData?.kpis || {
-    total_assets: totalAssetsCount || 2001,
-    available_assets: availableCount || 1191,
-    borrowed_assets: borrowedCount || 404,
-    maintenance_assets: maintenanceCount || 406,
-    pending_requests: pendingCount || 15,
-    utilization_rate: utilization || 20.2,
+    total_assets: totalAssetsCount,
+    available_assets: availableCount,
+    borrowed_assets: borrowedCount,
+    maintenance_assets: maintenanceCount,
+    pending_requests: pendingCount,
+    utilization_rate: utilization,
   };
 
   return (
@@ -384,49 +383,20 @@ function DashboardContent() {
           </nav>
         </div>
 
-        {/* User Profile & Role Switcher */}
-        <div className="space-y-3 pt-4 border-t border-slate-100">
-          <div className="flex items-center justify-between">
-            <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">Role Switcher</span>
-            <span className="text-[10px] px-2 py-0.5 rounded-full bg-emerald-100 text-emerald-800 font-semibold">
-              {role}
-            </span>
-          </div>
-
-          <div className="grid grid-cols-3 gap-1 p-1 bg-slate-100 rounded-xl border border-slate-200/80 text-[10px] font-semibold">
-            <button
-              onClick={() => switchRole("SUPER_ADMIN")}
-              className={`py-1.5 rounded-lg transition ${
-                role === "SUPER_ADMIN" ? "bg-white text-emerald-700 shadow-xs font-bold" : "text-slate-500 hover:text-slate-900"
-              }`}
-            >
-              Super
-            </button>
-            <button
-              onClick={() => switchRole("IT_ADMIN")}
-              className={`py-1.5 rounded-lg transition ${
-                role === "IT_ADMIN" ? "bg-white text-emerald-700 shadow-xs font-bold" : "text-slate-500 hover:text-slate-900"
-              }`}
-            >
-              Admin
-            </button>
-            <button
-              onClick={() => switchRole("EMPLOYEE")}
-              className={`py-1.5 rounded-lg transition ${
-                role === "EMPLOYEE" ? "bg-white text-emerald-700 shadow-xs font-bold" : "text-slate-500 hover:text-slate-900"
-              }`}
-            >
-              User
-            </button>
-          </div>
-
-          <div className="p-2.5 rounded-xl bg-slate-50 border border-slate-200/60 flex items-center gap-3">
-            <div className="h-8 w-8 rounded-lg bg-emerald-100 text-emerald-700 flex items-center justify-center font-bold text-xs">
-              {role === "SUPER_ADMIN" ? "SA" : role === "IT_ADMIN" ? "AD" : "EM"}
+        {/* Authenticated User Info */}
+        <div className="pt-4 border-t border-slate-100">
+          <div className="p-3 rounded-2xl bg-slate-50 border border-slate-200/60 flex items-center gap-3">
+            <div className="h-9 w-9 rounded-xl bg-emerald-100 text-emerald-700 flex items-center justify-center font-bold text-xs shadow-xs">
+              {role === "SUPER_ADMIN" ? "👑" : role === "IT_ADMIN" ? "🛡️" : "👤"}
             </div>
-            <div className="overflow-hidden">
-              <p className="text-xs font-bold text-slate-800 truncate">{user?.full_name || "Enterprise User"}</p>
-              <p className="text-[10px] text-slate-500 truncate font-mono">{user?.email || "user@equipflow.local"}</p>
+            <div className="overflow-hidden flex-1">
+              <p className="text-xs font-bold text-slate-800 truncate">{user?.full_name || "บัญชีผู้ใช้"}</p>
+              <div className="flex items-center gap-1.5 mt-0.5">
+                <span className="text-[9px] px-1.5 py-0.2 rounded font-bold uppercase bg-emerald-100 text-emerald-800">
+                  {role}
+                </span>
+                <span className="text-[10px] text-slate-400 truncate font-mono">{user?.email}</span>
+              </div>
             </div>
           </div>
         </div>
@@ -458,20 +428,36 @@ function DashboardContent() {
               </button>
             )}
 
-            {/* Auth Buttons */}
-            <Link
-              href="/login"
-              className="flex items-center gap-1.5 px-3 py-2 rounded-xl text-xs font-semibold text-emerald-700 bg-emerald-50 hover:bg-emerald-100 border border-emerald-200 transition cursor-pointer"
-            >
-              <LogIn className="h-4 w-4" />
-              <span>หน้า Login</span>
-            </Link>
-            <Link
-              href="/register"
-              className="flex items-center gap-1.5 px-3.5 py-2 rounded-xl text-xs font-semibold text-white bg-emerald-600 hover:bg-emerald-500 shadow-sm shadow-emerald-600/20 transition cursor-pointer"
-            >
-              <span>หน้า Register</span>
-            </Link>
+            {/* User Profile & Sign Out Button */}
+            {user ? (
+              <div className="flex items-center gap-3">
+                <div className="text-right hidden sm:block">
+                  <p className="text-xs font-bold text-slate-800">{user.full_name}</p>
+                  <p className="text-[10px] text-emerald-600 font-mono font-semibold">{user.role}</p>
+                </div>
+                <button
+                  onClick={async () => {
+                    await signOut();
+                    router.replace("/login");
+                  }}
+                  className="flex items-center gap-1.5 px-3 py-2 rounded-xl text-xs font-semibold text-rose-700 bg-rose-50 hover:bg-rose-100 border border-rose-200 transition cursor-pointer"
+                  title="ออกจากระบบ"
+                >
+                  <LogOut className="h-4 w-4" />
+                  <span>ออกจากระบบ</span>
+                </button>
+              </div>
+            ) : (
+              <div className="flex items-center gap-2">
+                <Link
+                  href="/login"
+                  className="flex items-center gap-1.5 px-3.5 py-2 rounded-xl text-xs font-semibold text-white bg-emerald-600 hover:bg-emerald-500 shadow-sm shadow-emerald-600/20 transition cursor-pointer"
+                >
+                  <LogIn className="h-4 w-4" />
+                  <span>เข้าสู่ระบบ</span>
+                </Link>
+              </div>
+            )}
           </div>
         </header>
 
@@ -540,58 +526,67 @@ function DashboardContent() {
                 <div className="lg:col-span-1 p-6 rounded-2xl bg-white border border-slate-200/80 shadow-xs space-y-4">
                   <h3 className="font-bold text-sm text-slate-900 flex items-center gap-2">
                     <Layers className="h-4 w-4 text-emerald-600" />
-                    หมวดหมู่อุปกรณ์ยอดนิยม
+                    หมวดหมู่อุปกรณ์ในระบบ
                   </h3>
                   <div className="space-y-3 pt-2">
-                    {[
-                      { name: "Laptops & Notebooks", total: 820, out: 245 },
-                      { name: "Workstations & Desktops", total: 460, out: 95 },
-                      { name: "Monitors & Displays", total: 380, out: 42 },
-                      { name: "Mobile Devices & Tablets", total: 210, out: 18 },
-                      { name: "Networking & AV", total: 131, out: 4 },
-                    ].map((cat, i) => (
-                      <div key={i} className="flex items-center justify-between p-3 rounded-xl bg-slate-50 border border-slate-100">
-                        <span className="text-xs font-bold text-slate-700">{cat.name}</span>
-                        <div className="flex items-center gap-2">
-                          <span className="text-xs font-mono font-bold text-slate-900">{cat.total} เครื่อง</span>
-                          <span className="text-[10px] px-2 py-0.5 rounded-full bg-emerald-100 text-emerald-800 font-semibold">
-                            ยืม {cat.out}
-                          </span>
+                    {analyticsData?.category_breakdown && analyticsData.category_breakdown.length > 0 ? (
+                      analyticsData.category_breakdown.map((cat: any, i: number) => (
+                        <div key={i} className="flex items-center justify-between p-3 rounded-xl bg-slate-50 border border-slate-100">
+                          <span className="text-xs font-bold text-slate-700">{cat.name}</span>
+                          <div className="flex items-center gap-2">
+                            <span className="text-xs font-mono font-bold text-slate-900">{cat.total} เครื่อง</span>
+                            <span className="text-[10px] px-2 py-0.5 rounded-full bg-emerald-100 text-emerald-800 font-semibold">
+                              ยืม {cat.borrowed || 0}
+                            </span>
+                          </div>
                         </div>
+                      ))
+                    ) : (
+                      <div className="text-center py-8 text-xs text-slate-400">
+                        {allAssets.length > 0 ? (
+                          <div className="space-y-2">
+                            <p className="font-semibold text-slate-600">อุปกรณ์ทั้งหมดในระบบ</p>
+                            <p className="text-lg font-extrabold text-emerald-600 font-mono">{totalAssetsCount} รายการ</p>
+                          </div>
+                        ) : (
+                          "ไม่มีข้อมูลหมวดหมู่อุปกรณ์"
+                        )}
                       </div>
-                    ))}
+                    )}
                   </div>
                 </div>
 
-                {/* Realtime Activity Feed */}
+                {/* Realtime Activity Feed from Database Audit Logs */}
                 <div className="lg:col-span-2 p-6 rounded-2xl bg-white border border-slate-200/80 shadow-xs space-y-4">
                   <h3 className="font-bold text-sm text-slate-900 flex items-center gap-2">
                     <Activity className="h-4 w-4 text-emerald-600" />
-                    ประวัติธุรกรรมและกิจกรรมล่าสุด
+                    ประวัติธุรกรรมและกิจกรรมล่าสุดจากระบบ
                   </h3>
                   <div className="divide-y divide-slate-100">
-                    {[
-                      { action: "CREATE_BORROW_REQUEST", actor: "John Doe (Employee)", detail: "ขอจองเครื่อง Apple MacBook Pro 14 M3", time: "10 นาทีที่แล้ว" },
-                      { action: "HANDOVER_ASSET", actor: "IT Admin", detail: "ส่งมอบ Dell Latitude 7440 พร้อมถ่ายรูปตรวจสภาพ", time: "28 นาทีที่แล้ว" },
-                      { action: "APPROVE_BORROW_REQUEST", actor: "IT Admin", detail: "อนุมัติคำขอยืม ThinkPad X1 Carbon Gen 11", time: "1 ชั่วโมงที่แล้ว" },
-                      { action: "RETURN_ASSET", actor: "IT Admin", detail: "ตรวจรับคืน Samsung Odyssey 34 สภาพสมบูรณ์", time: "2 ชั่วโมงที่แล้ว" },
-                      { action: "CREATE_ASSET", actor: "IT Admin", detail: "ลงทะเบียน Batch อุปกรณ์ใหม่ 2,000 ชิ้น", time: "เมื่อวานนี้" },
-                    ].map((act, i) => (
-                      <div key={i} className="py-3 flex items-center justify-between first:pt-0 last:pb-0">
-                        <div className="flex items-center gap-3">
-                          <div className="h-8 w-8 rounded-lg bg-emerald-50 text-emerald-600 flex items-center justify-center font-bold text-xs">
-                            ✓
+                    {auditLogsData?.data && auditLogsData.data.length > 0 ? (
+                      auditLogsData.data.slice(0, 5).map((act: any, i: number) => (
+                        <div key={i} className="py-3 flex items-center justify-between first:pt-0 last:pb-0">
+                          <div className="flex items-center gap-3">
+                            <div className="h-8 w-8 rounded-lg bg-emerald-50 text-emerald-600 flex items-center justify-center font-bold text-xs">
+                              ✓
+                            </div>
+                            <div>
+                              <p className="text-xs font-bold text-slate-900">{act.action}</p>
+                              <p className="text-[11px] text-slate-500">
+                                ตาราง: {act.target_table} • โดย <strong className="text-slate-700">{act.actor?.full_name || "ระบบ"}</strong>
+                              </p>
+                            </div>
                           </div>
-                          <div>
-                            <p className="text-xs font-bold text-slate-900">{act.action}</p>
-                            <p className="text-[11px] text-slate-500">{act.detail} • โดย <strong className="text-slate-700">{act.actor}</strong></p>
-                          </div>
+                          <span className="text-[11px] font-mono text-slate-400">
+                            {new Date(act.created_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+                          </span>
                         </div>
-                        <span className="text-[11px] font-mono text-slate-400">
-                          {act.time}
-                        </span>
+                      ))
+                    ) : (
+                      <div className="text-center py-10 text-xs text-slate-400">
+                        ยังไม่มีประวัติกิจกรรมล่าสุดในระบบ
                       </div>
-                    ))}
+                    )}
                   </div>
                 </div>
               </div>

@@ -34,41 +34,12 @@ export default function LoginPage() {
 
       // Redirection based on role permissions
       setTimeout(() => {
-        if (email.includes("admin")) {
-          router.push("/?tab=dashboard");
-        } else {
-          router.push("/?tab=assets");
-        }
+        router.push("/");
       }, 900);
     } catch (err: any) {
       setErrorMsg(err.message || "เกิดข้อผิดพลาดในการเข้าสู่ระบบ");
       setIsSubmitting(false);
     }
-  };
-
-  const handleQuickDemoLogin = async (demoRole: "SUPER_ADMIN" | "IT_ADMIN" | "EMPLOYEE") => {
-    setErrorMsg("");
-    setIsSubmitting(true);
-
-    let targetEmail = "admin@equipflow.local";
-    if (demoRole === "EMPLOYEE") targetEmail = "employee@equipflow.local";
-
-    setEmail(targetEmail);
-    setPassword("Diwooo1661@");
-
-    // Authenticate and switch role
-    switchRole(demoRole);
-    setSuccessMsg(`เข้าสู่ระบบในสิทธิ์ ${demoRole} สำเร็จ!`);
-
-    setTimeout(() => {
-      if (demoRole === "SUPER_ADMIN") {
-        router.push("/?tab=users");
-      } else if (demoRole === "IT_ADMIN") {
-        router.push("/?tab=admin");
-      } else {
-        router.push("/?tab=assets");
-      }
-    }, 800);
   };
 
   return (
@@ -157,36 +128,6 @@ export default function LoginPage() {
             )}
           </button>
         </form>
-
-        {/* Quick Demo Role Login */}
-        <div className="pt-4 border-t border-slate-100 space-y-2 text-center">
-          <p className="text-[11px] text-slate-400 font-medium">
-            หรือทดสอบเข้าใช้งานทันทีตามสิทธิ์ (Role-Based Demo):
-          </p>
-          <div className="grid grid-cols-3 gap-2">
-            <button
-              type="button"
-              onClick={() => handleQuickDemoLogin("SUPER_ADMIN")}
-              className="px-2 py-2 rounded-xl bg-slate-100 hover:bg-emerald-50 hover:border-emerald-200 border border-transparent text-slate-700 hover:text-emerald-800 text-[11px] font-semibold transition cursor-pointer"
-            >
-              Super Admin
-            </button>
-            <button
-              type="button"
-              onClick={() => handleQuickDemoLogin("IT_ADMIN")}
-              className="px-2 py-2 rounded-xl bg-slate-100 hover:bg-emerald-50 hover:border-emerald-200 border border-transparent text-slate-700 hover:text-emerald-800 text-[11px] font-semibold transition cursor-pointer"
-            >
-              IT Admin
-            </button>
-            <button
-              type="button"
-              onClick={() => handleQuickDemoLogin("EMPLOYEE")}
-              className="px-2 py-2 rounded-xl bg-slate-100 hover:bg-emerald-50 hover:border-emerald-200 border border-transparent text-slate-700 hover:text-emerald-800 text-[11px] font-semibold transition cursor-pointer"
-            >
-              Employee
-            </button>
-          </div>
-        </div>
 
         {/* Register Link */}
         <div className="text-center pt-2">

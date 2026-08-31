@@ -19,7 +19,7 @@ interface AuthContextType {
 const AuthContext = createContext<AuthContextType | undefined>(undefined);
 
 export function AuthProvider({ children }: { children: React.ReactNode }) {
-  const [role, setRole] = useState<UserRole>("SUPER_ADMIN");
+  const [role, setRole] = useState<UserRole>("EMPLOYEE");
   const [user, setUser] = useState<Profile | null>(null);
   const [isLoading, setIsLoading] = useState(true);
   const [isAuthenticated, setIsAuthenticated] = useState(false);
@@ -58,22 +58,16 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
             apiClient.defaults.headers.common["X-Dev-Role"] = uRole;
           }
         } else {
-          // Default Dev profile (Super Admin for comprehensive management)
-          setIsAuthenticated(true);
-          const devUser: Profile = {
-            id: "11111111-1111-1111-1111-111111111111",
-            email: "admin@equipflow.local",
-            full_name: "Super Administrator (Dev)",
-            role: "SUPER_ADMIN",
-            is_active: true,
-            created_at: new Date().toISOString(),
-          };
-          setUser(devUser);
-          setRole("SUPER_ADMIN");
-          apiClient.defaults.headers.common["X-Dev-Role"] = "SUPER_ADMIN";
+          // No active session: Not authenticated
+          setIsAuthenticated(false);
+          setUser(null);
+          setRole("EMPLOYEE");
+          delete apiClient.defaults.headers.common["X-Dev-Role"];
         }
       } catch (err) {
         console.error("Auth init error:", err);
+        setIsAuthenticated(false);
+        setUser(null);
       } finally {
         setIsLoading(false);
       }
