@@ -1150,7 +1150,7 @@ function DashboardContent() {
                   <div className="space-y-3 pt-1">
                     {requiredFormFields.map((field) => (
                       <div key={field.name}>
-                        <label className="block text-xs font-semibold text-slate-700 mb-1">
+                        <label className="block text-xs font-bold text-slate-700 mb-1">
                           {field.label} {field.required && <span className="text-rose-500">*</span>}
                         </label>
                         {field.type === "checkbox" ? (
@@ -1165,6 +1165,22 @@ function DashboardContent() {
                             />
                             <span className="text-xs text-slate-700">{field.label}</span>
                           </label>
+                        ) : field.type === "select" ? (
+                          <select
+                            required={field.required}
+                            value={dynamicFormData[field.name] || ""}
+                            onChange={(e) =>
+                              setDynamicFormData({ ...dynamicFormData, [field.name]: e.target.value })
+                            }
+                            className="w-full bg-white border border-emerald-100 rounded-xl p-2.5 text-xs text-slate-800 font-semibold focus:ring-2 focus:ring-emerald-500/20 focus:border-emerald-500 cursor-pointer"
+                          >
+                            <option value="">-- กรุณาเลือก --</option>
+                            {field.options?.map((opt) => (
+                              <option key={opt} value={opt}>
+                                {opt}
+                              </option>
+                            ))}
+                          </select>
                         ) : field.type === "number" ? (
                           <input
                             type="number"
