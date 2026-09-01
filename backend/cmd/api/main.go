@@ -39,13 +39,16 @@ func main() {
 	borrowRepo := postgres.NewBorrowRepository(dbClient.DB)
 	auditRepo := postgres.NewAuditRepository(dbClient.DB)
 	analyticsRepo := postgres.NewAnalyticsRepository(dbClient.DB)
+	userRepo := postgres.NewUserRepository(dbClient.DB)
+	catRepo, locRepo := postgres.NewCategoryRepository(dbClient.DB)
+	notifRepo := postgres.NewNotificationRepository(dbClient.DB)
 
 	// 4. Initialize Usecases (Business Logic)
 	assetUsecase := usecase.NewAssetUsecase(assetRepo, auditRepo)
-	borrowUsecase := usecase.NewBorrowUsecase(borrowRepo, assetRepo, auditRepo)
+	borrowUsecase := usecase.NewBorrowUsecase(borrowRepo, assetRepo, auditRepo, notifRepo)
 	analyticsUsecase := usecase.NewAnalyticsUsecase(analyticsRepo)
-	userRepo := postgres.NewUserRepository(dbClient.DB)
 	userUsecase := usecase.NewUserUsecase(userRepo, auditRepo)
+	catUsecase := usecase.NewCategoryUsecase(catRepo, locRepo, auditRepo)
 
 	// 5. Initialize Delivery Handlers
 	assetHandler := handler.NewAssetHandler(assetUsecase)
@@ -53,6 +56,8 @@ func main() {
 	analyticsHandler := handler.NewAnalyticsHandler(analyticsUsecase)
 	auditHandler := handler.NewAuditHandler(auditRepo)
 	userHandler := handler.NewUserHandler(userUsecase)
+	catHandler := handler.NewCategoryHandler(catUsecase)
+	notifHandler := handler.NewNotificationHandler(notifRepo)
 
 	// 6. Initialize Fiber App
 	app := fiber.New(fiber.Config{
@@ -88,14 +93,16 @@ func main() {
 
 	// 9. Wire Application Routes (Clean Architecture)
 	deliveryHttp.SetupRoutes(deliveryHttp.RouterConfig{
-		App:              app,
-		Cfg:              cfg,
-		DB:               dbClient.DB,
-		AssetHandler:     assetHandler,
-		BorrowHandler:    borrowHandler,
-		AnalyticsHandler: analyticsHandler,
-		AuditHandler:     auditHandler,
-		UserHandler:      userHandler,
+		App:                 app,
+		Cfg:                 cfg,
+		DB:                  dbClient.DB,
+		AssetHandler:        assetHandler,
+		BorrowHandler:       borrowHandler,
+		AnalyticsHandler:    analyticsHandler,
+		AuditHandler:        auditHandler,
+		UserHandler:         userHandler,
+		CategoryHandler:     catHandler,
+		NotificationHandler: notifHandler,
 	})
 
 	// 10. Start Server

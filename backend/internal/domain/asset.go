@@ -55,10 +55,13 @@ func (j *JSONB) Scan(value interface{}) error {
 
 // Category Entity
 type Category struct {
-	ID          uuid.UUID `gorm:"type:uuid;default:uuid_generate_v4();primaryKey" json:"id"`
-	Name        string    `gorm:"type:text;not null;unique" json:"name"`
-	Description *string   `gorm:"type:text" json:"description,omitempty"`
-	CreatedAt   time.Time `gorm:"autoCreateTime" json:"created_at"`
+	ID                 uuid.UUID `gorm:"type:uuid;default:uuid_generate_v4();primaryKey" json:"id"`
+	Name               string    `gorm:"type:text;not null;unique" json:"name"`
+	Description        *string   `gorm:"type:text" json:"description,omitempty"`
+	Icon               string    `gorm:"type:text;default:'box'" json:"icon"`
+	RequiredFormFields JSONB     `gorm:"type:jsonb;default:'[]'" json:"required_form_fields"`
+	ChecklistTemplate  JSONB     `gorm:"type:jsonb;default:'[]'" json:"checklist_template"`
+	CreatedAt          time.Time `gorm:"autoCreateTime" json:"created_at"`
 }
 
 func (Category) TableName() string {
@@ -76,6 +79,33 @@ type Location struct {
 
 func (Location) TableName() string {
 	return "public.locations"
+}
+
+// CategoryRepository interface defines database operations for Categories
+type CategoryRepository interface {
+	List(ctx context.Context) ([]Category, error)
+	GetByID(ctx context.Context, id uuid.UUID) (*Category, error)
+	Create(ctx context.Context, category *Category) error
+	Update(ctx context.Context, category *Category) error
+	Delete(ctx context.Context, id uuid.UUID) error
+}
+
+// LocationRepository interface defines database operations for Locations
+type LocationRepository interface {
+	List(ctx context.Context) ([]Location, error)
+	GetByID(ctx context.Context, id uuid.UUID) (*Location, error)
+	Create(ctx context.Context, location *Location) error
+}
+
+// CategoryUsecase interface defines business logic for Categories & Locations
+type CategoryUsecase interface {
+	ListCategories(ctx context.Context) ([]Category, error)
+	GetCategoryByID(ctx context.Context, id uuid.UUID) (*Category, error)
+	CreateCategory(ctx context.Context, actorID uuid.UUID, category *Category) error
+	UpdateCategory(ctx context.Context, actorID uuid.UUID, category *Category) error
+	DeleteCategory(ctx context.Context, actorID uuid.UUID, id uuid.UUID) error
+	ListLocations(ctx context.Context) ([]Location, error)
+	CreateLocation(ctx context.Context, actorID uuid.UUID, location *Location) error
 }
 
 // Asset Entity

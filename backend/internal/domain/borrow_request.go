@@ -29,6 +29,7 @@ type BorrowRequest struct {
 	AssetID         uuid.UUID     `gorm:"type:uuid;not null" json:"asset_id"`
 	Asset           *Asset        `gorm:"foreignKey:AssetID" json:"asset,omitempty"`
 	Purpose         string        `gorm:"type:text;not null" json:"purpose"`
+	RequestData     JSONB         `gorm:"type:jsonb;default:'{}'" json:"request_data"`
 	StartDate       time.Time     `gorm:"type:timestamptz;not null" json:"start_date"`
 	EndDate         time.Time     `gorm:"type:timestamptz;not null" json:"end_date"`
 	Status          RequestStatus `gorm:"type:request_status_enum;not null;default:'PENDING'" json:"status"`
@@ -48,25 +49,27 @@ func (BorrowRequest) TableName() string {
 
 // BorrowTransaction represents public.borrow_transactions (Handover and Return records)
 type BorrowTransaction struct {
-	ID                uuid.UUID       `gorm:"type:uuid;default:uuid_generate_v4();primaryKey" json:"id"`
-	RequestID         uuid.UUID       `gorm:"type:uuid;not null;unique" json:"request_id"`
-	AssetID           uuid.UUID       `gorm:"type:uuid;not null" json:"asset_id"`
-	HandedOverBy      uuid.UUID       `gorm:"type:uuid;not null" json:"handed_over_by"`
-	HandoverOfficer   *Profile        `gorm:"foreignKey:HandedOverBy" json:"handover_officer,omitempty"`
-	HandoverAt        time.Time       `gorm:"type:timestamptz;autoCreateTime" json:"handover_at"`
-	HandoverCondition ConditionStatus `gorm:"type:condition_status_enum;not null" json:"handover_condition"`
-	HandoverNotes     *string         `gorm:"type:text" json:"handover_notes,omitempty"`
-	HandoverPhotos    pgtype.FlatArray[string] `gorm:"type:text[];default:ARRAY[]::text[]" json:"handover_photos"`
+	ID                       uuid.UUID                `gorm:"type:uuid;default:uuid_generate_v4();primaryKey" json:"id"`
+	RequestID                uuid.UUID                `gorm:"type:uuid;not null;unique" json:"request_id"`
+	AssetID                  uuid.UUID                `gorm:"type:uuid;not null" json:"asset_id"`
+	HandedOverBy             uuid.UUID                `gorm:"type:uuid;not null" json:"handed_over_by"`
+	HandoverOfficer          *Profile                 `gorm:"foreignKey:HandedOverBy" json:"handover_officer,omitempty"`
+	HandoverAt               time.Time                `gorm:"type:timestamptz;autoCreateTime" json:"handover_at"`
+	HandoverCondition        ConditionStatus          `gorm:"type:condition_status_enum;not null" json:"handover_condition"`
+	HandoverNotes            *string                  `gorm:"type:text" json:"handover_notes,omitempty"`
+	HandoverPhotos           pgtype.FlatArray[string] `gorm:"type:text[];default:ARRAY[]::text[]" json:"handover_photos"`
+	HandoverChecklistResults JSONB                    `gorm:"type:jsonb;default:'[]'" json:"handover_checklist_results"`
 
-	ReceivedBy      *uuid.UUID       `gorm:"type:uuid" json:"received_by,omitempty"`
-	ReturnOfficer   *Profile         `gorm:"foreignKey:ReceivedBy" json:"return_officer,omitempty"`
-	ReceivedAt      *time.Time       `gorm:"type:timestamptz" json:"received_at,omitempty"`
-	ReturnCondition *ConditionStatus `gorm:"type:condition_status_enum" json:"return_condition,omitempty"`
-	ReturnNotes     *string          `gorm:"type:text" json:"return_notes,omitempty"`
-	ReturnPhotos    pgtype.FlatArray[string] `gorm:"type:text[];default:ARRAY[]::text[]" json:"return_photos"`
-	IsDamaged       bool             `gorm:"default:false" json:"is_damaged"`
-	DamageFineAmount float64         `gorm:"type:numeric(10,2);default:0.00" json:"damage_fine_amount"`
-	CreatedAt       time.Time        `gorm:"autoCreateTime" json:"created_at"`
+	ReceivedBy             *uuid.UUID               `gorm:"type:uuid" json:"received_by,omitempty"`
+	ReturnOfficer          *Profile                 `gorm:"foreignKey:ReceivedBy" json:"return_officer,omitempty"`
+	ReceivedAt             *time.Time               `gorm:"type:timestamptz" json:"received_at,omitempty"`
+	ReturnCondition        *ConditionStatus         `gorm:"type:condition_status_enum" json:"return_condition,omitempty"`
+	ReturnNotes            *string                  `gorm:"type:text" json:"return_notes,omitempty"`
+	ReturnPhotos           pgtype.FlatArray[string] `gorm:"type:text[];default:ARRAY[]::text[]" json:"return_photos"`
+	ReturnChecklistResults JSONB                    `gorm:"type:jsonb;default:'[]'" json:"return_checklist_results"`
+	IsDamaged              bool                     `gorm:"default:false" json:"is_damaged"`
+	DamageFineAmount       float64                  `gorm:"type:numeric(10,2);default:0.00" json:"damage_fine_amount"`
+	CreatedAt              time.Time                `gorm:"autoCreateTime" json:"created_at"`
 }
 
 func (BorrowTransaction) TableName() string {
@@ -75,10 +78,11 @@ func (BorrowTransaction) TableName() string {
 
 // Request & Filter DTOs
 type CreateBorrowRequestInput struct {
-	AssetID   uuid.UUID `json:"asset_id" validate:"required"`
-	Purpose   string    `json:"purpose" validate:"required,min=5"`
-	StartDate time.Time `json:"start_date" validate:"required"`
-	EndDate   time.Time `json:"end_date" validate:"required,gtfield=StartDate"`
+	AssetID     uuid.UUID `json:"asset_id" validate:"required"`
+	Purpose     string    `json:"purpose" validate:"required,min=5"`
+	RequestData JSONB     `json:"request_data"`
+	StartDate   time.Time `json:"start_date" validate:"required"`
+	EndDate     time.Time `json:"end_date" validate:"required,gtfield=StartDate"`
 }
 
 type ReviewBorrowRequestInput struct {
@@ -87,15 +91,17 @@ type ReviewBorrowRequestInput struct {
 }
 
 type HandoverInput struct {
-	Condition ConditionStatus `json:"condition" validate:"required"`
-	Notes     *string         `json:"notes"`
-	Photos    []string        `json:"photos"`
+	Condition        ConditionStatus `json:"condition" validate:"required"`
+	Notes            *string         `json:"notes"`
+	Photos           []string        `json:"photos"`
+	ChecklistResults JSONB           `json:"checklist_results"`
 }
 
 type ReturnInput struct {
 	Condition        ConditionStatus `json:"condition" validate:"required"`
 	Notes            *string         `json:"notes"`
 	Photos           []string        `json:"photos"`
+	ChecklistResults JSONB           `json:"checklist_results"`
 	IsDamaged        bool            `json:"is_damaged"`
 	DamageFineAmount float64         `json:"damage_fine_amount"`
 }

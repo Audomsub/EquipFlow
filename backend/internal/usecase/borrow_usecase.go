@@ -17,13 +17,20 @@ type borrowUsecase struct {
 	borrowRepo domain.BorrowRepository
 	assetRepo  domain.AssetRepository
 	auditRepo  domain.AuditRepository
+	notifRepo  domain.NotificationRepository
 }
 
-func NewBorrowUsecase(borrowRepo domain.BorrowRepository, assetRepo domain.AssetRepository, auditRepo domain.AuditRepository) domain.BorrowUsecase {
+func NewBorrowUsecase(
+	borrowRepo domain.BorrowRepository,
+	assetRepo domain.AssetRepository,
+	auditRepo domain.AuditRepository,
+	notifRepo domain.NotificationRepository,
+) domain.BorrowUsecase {
 	return &borrowUsecase{
 		borrowRepo: borrowRepo,
 		assetRepo:  assetRepo,
 		auditRepo:  auditRepo,
+		notifRepo:  notifRepo,
 	}
 }
 
@@ -73,6 +80,7 @@ func (u *borrowUsecase) CreateRequest(ctx context.Context, userID uuid.UUID, inp
 		UserID:        userID,
 		AssetID:       input.AssetID,
 		Purpose:       input.Purpose,
+		RequestData:   input.RequestData,
 		StartDate:     input.StartDate,
 		EndDate:       input.EndDate,
 		Status:        domain.RequestStatusPending,
@@ -82,7 +90,15 @@ func (u *borrowUsecase) CreateRequest(ctx context.Context, userID uuid.UUID, inp
 		return nil, fmt.Errorf("failed to save borrow request: %w", err)
 	}
 
-	// 5. Automatic Audit Logging
+	// 5. Create In-App Notification
+	_ = u.notifRepo.Create(ctx, &domain.Notification{
+		UserID:  userID,
+		Title:   "ยื่นคำขอยืมอุปกรณ์เรียบร้อย",
+		Message: fmt.Sprintf("คำขอเลขที่ %s สำหรับอุปกรณ์ '%s' อยู่ระหว่างรอการตรวจสอบจากเจ้าหน้าที่", req.RequestNumber, asset.Name),
+		Type:    "INFO",
+	})
+
+	// 6. Automatic Audit Logging
 	reqBytes, _ := json.Marshal(req)
 	var newJSON domain.JSONB
 	_ = json.Unmarshal(reqBytes, &newJSON)
@@ -130,6 +146,27 @@ func (u *borrowUsecase) ReviewRequest(ctx context.Context, adminID uuid.UUID, re
 		return nil, fmt.Errorf("failed to update review status: %w", err)
 	}
 
+	// In-App Notification to User
+	notifTitle := "คำขอยืมอุปกรณ์ได้รับการอนุมัติ 🎉"
+	notifType := "SUCCESS"
+	notifMsg := fmt.Sprintf("คำขอยืมเลขที่ %s ได้รับการอนุมัติแล้ว กรุณาติดต่อรับอุปกรณ์ตามกำหนดเวลา", req.RequestNumber)
+	if input.Status == domain.RequestStatusRejected {
+		notifTitle = "คำขอยืมอุปกรณ์ถูกปฏิเสธ"
+		notifType = "ALERT"
+		reason := "ไม่ระบุเหตุผล"
+		if input.RejectionReason != nil && *input.RejectionReason != "" {
+			reason = *input.RejectionReason
+		}
+		notifMsg = fmt.Sprintf("คำขอยืมเลขที่ %s ถูกปฏิเสธ เนื่องจาก: %s", req.RequestNumber, reason)
+	}
+
+	_ = u.notifRepo.Create(ctx, &domain.Notification{
+		UserID:  req.UserID,
+		Title:   notifTitle,
+		Message: notifMsg,
+		Type:    notifType,
+	})
+
 	// Audit Log
 	action := "APPROVE_BORROW_REQUEST"
 	if input.Status == domain.RequestStatusRejected {
@@ -157,19 +194,28 @@ func (u *borrowUsecase) HandoverAsset(ctx context.Context, adminID uuid.UUID, re
 	}
 
 	tx := &domain.BorrowTransaction{
-		ID:                uuid.New(),
-		RequestID:         req.ID,
-		AssetID:           req.AssetID,
-		HandedOverBy:      adminID,
-		HandoverAt:        time.Now(),
-		HandoverCondition: input.Condition,
-		HandoverNotes:     input.Notes,
-		HandoverPhotos:    pgtype.FlatArray[string](input.Photos),
+		ID:                       uuid.New(),
+		RequestID:                req.ID,
+		AssetID:                  req.AssetID,
+		HandedOverBy:             adminID,
+		HandoverAt:               time.Now(),
+		HandoverCondition:        input.Condition,
+		HandoverNotes:            input.Notes,
+		HandoverPhotos:           pgtype.FlatArray[string](input.Photos),
+		HandoverChecklistResults: input.ChecklistResults,
 	}
 
 	if err := u.borrowRepo.CreateHandover(ctx, tx); err != nil {
 		return nil, fmt.Errorf("failed to process handover: %w", err)
 	}
+
+	// Notification to User
+	_ = u.notifRepo.Create(ctx, &domain.Notification{
+		UserID:  req.UserID,
+		Title:   "ส่งมอบอุปกรณ์เรียบร้อย 📦",
+		Message: fmt.Sprintf("เจ้าหน้าที่ได้ส่งมอบอุปกรณ์สำหรับคำขอ %s เรียบร้อยแล้ว สภาพ: %s", req.RequestNumber, input.Condition),
+		Type:    "SUCCESS",
+	})
 
 	// Audit Log
 	_ = u.auditRepo.Create(ctx, &domain.AuditLog{
@@ -204,12 +250,25 @@ func (u *borrowUsecase) ReturnAsset(ctx context.Context, adminID uuid.UUID, requ
 	tx.ReturnCondition = &input.Condition
 	tx.ReturnNotes = input.Notes
 	tx.ReturnPhotos = pgtype.FlatArray[string](input.Photos)
+	tx.ReturnChecklistResults = input.ChecklistResults
 	tx.IsDamaged = input.IsDamaged
 	tx.DamageFineAmount = input.DamageFineAmount
 
 	if err := u.borrowRepo.ProcessReturn(ctx, tx); err != nil {
 		return nil, fmt.Errorf("failed to process return: %w", err)
 	}
+
+	// Notification to User
+	notifMsg := fmt.Sprintf("ตรวจรับคืนอุปกรณ์สำหรับคำขอ %s เรียบร้อยแล้ว", req.RequestNumber)
+	if input.IsDamaged && input.DamageFineAmount > 0 {
+		notifMsg = fmt.Sprintf("ตรวจรับคืนอุปกรณ์ %s พบความชำรุด มีค่าปรับความเสียหาย ฿%.2f", req.RequestNumber, input.DamageFineAmount)
+	}
+	_ = u.notifRepo.Create(ctx, &domain.Notification{
+		UserID:  req.UserID,
+		Title:   "ตรวจรับคืนอุปกรณ์เรียบร้อย ✅",
+		Message: notifMsg,
+		Type:    "SUCCESS",
+	})
 
 	// Audit Log
 	_ = u.auditRepo.Create(ctx, &domain.AuditLog{

@@ -11,14 +11,16 @@ import (
 )
 
 type RouterConfig struct {
-	App              *fiber.App
-	Cfg              *config.Config
-	DB               *gorm.DB
-	AssetHandler     *handler.AssetHandler
-	BorrowHandler    *handler.BorrowHandler
-	AnalyticsHandler *handler.AnalyticsHandler
-	AuditHandler     *handler.AuditHandler
-	UserHandler      *handler.UserHandler
+	App                 *fiber.App
+	Cfg                 *config.Config
+	DB                  *gorm.DB
+	AssetHandler        *handler.AssetHandler
+	BorrowHandler       *handler.BorrowHandler
+	AnalyticsHandler    *handler.AnalyticsHandler
+	AuditHandler        *handler.AuditHandler
+	UserHandler         *handler.UserHandler
+	CategoryHandler     *handler.CategoryHandler
+	NotificationHandler *handler.NotificationHandler
 }
 
 func SetupRoutes(rc RouterConfig) {
@@ -40,6 +42,34 @@ func SetupRoutes(rc RouterConfig) {
 		}
 		return c.JSON(fiber.Map{"data": profile})
 	})
+
+	// -------------------------------------------------------------------------
+	// CATEGORIES & LOCATIONS (MASTER DATA ENGINE)
+	// -------------------------------------------------------------------------
+	categories := protected.Group("/categories")
+	{
+		categories.Get("/", rc.CategoryHandler.ListCategories)
+		categories.Get("/:id", rc.CategoryHandler.GetCategoryByID)
+		categories.Post("/", middleware.RequireAdmin(), rc.CategoryHandler.CreateCategory)
+		categories.Put("/:id", middleware.RequireAdmin(), rc.CategoryHandler.UpdateCategory)
+		categories.Delete("/:id", middleware.RequireSuperAdmin(), rc.CategoryHandler.DeleteCategory)
+	}
+
+	locations := protected.Group("/locations")
+	{
+		locations.Get("/", rc.CategoryHandler.ListLocations)
+		locations.Post("/", middleware.RequireAdmin(), rc.CategoryHandler.CreateLocation)
+	}
+
+	// -------------------------------------------------------------------------
+	// NOTIFICATIONS
+	// -------------------------------------------------------------------------
+	notifications := protected.Group("/notifications")
+	{
+		notifications.Get("/", rc.NotificationHandler.ListMyNotifications)
+		notifications.Post("/:id/read", rc.NotificationHandler.MarkAsRead)
+		notifications.Post("/read-all", rc.NotificationHandler.MarkAllAsRead)
+	}
 
 	// -------------------------------------------------------------------------
 	// ASSET ROUTES

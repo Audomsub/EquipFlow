@@ -1,14 +1,17 @@
 "use client";
 
-import React, { useState, useEffect } from "react";
+import React, { useState, useEffect, Suspense } from "react";
 import Link from "next/link";
 import { useSearchParams, useRouter } from "next/navigation";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { apiClient } from "@/lib/api";
-import { Asset, BorrowRequest, Profile, UserRole, ConditionStatus } from "@/types";
+import { Asset, BorrowRequest, Profile, UserRole, ConditionStatus, Category } from "@/types";
 import { useAuth } from "@/context/auth-context";
 import { QRCodeModal } from "@/components/qr-code-modal";
 import { InspectionModal } from "@/components/inspection-modal";
+import { NotificationBell } from "@/components/notification-bell";
+import { CameraQRScannerModal } from "@/components/camera-qr-scanner-modal";
+import { CategoryManagerModal } from "@/components/category-manager-modal";
 import { 
   Laptop, 
   Layers, 
@@ -34,17 +37,18 @@ import {
   LogOut,
   Users,
   UserCheck,
-  ShieldAlert
+  ShieldAlert,
+  Car,
+  Settings2,
+  CalendarCheck,
+  ScanLine
 } from "lucide-react";
-import { AuthModal } from "@/components/auth-modal";
-
-import { Suspense } from "react";
 
 function DashboardContent() {
   const router = useRouter();
   const searchParams = useSearchParams();
   const queryClient = useQueryClient();
-  const { user, role, switchRole, signOut, isAuthenticated, isLoading: isAuthLoading } = useAuth();
+  const { user, role, signOut, isAuthenticated, isLoading: isAuthLoading } = useAuth();
 
   const [activeTab, setActiveTab] = useState<"dashboard" | "assets" | "requests" | "admin" | "audit" | "users">("dashboard");
 
@@ -59,44 +63,79 @@ function DashboardContent() {
   useEffect(() => {
     const tabParam = searchParams.get("tab");
     if (tabParam && ["dashboard", "assets", "requests", "admin", "audit", "users"].includes(tabParam)) {
-      // บล็อกไม่ให้ Employee เข้าแท็บ admin, audit, users
-      if ((tabParam === "admin" || tabParam === "audit") && role === "EMPLOYEE") {
+      if ((tabParam === "admin" || tabParam === "audit" || tabParam === "users") && role === "EMPLOYEE") {
         setActiveTab("assets");
         return;
       }
-      // บล็อกไม่ให้ผู้ที่มิใช่ Super Admin เข้าแท็บ users
       if (tabParam === "users" && role !== "SUPER_ADMIN") {
         setActiveTab(role === "IT_ADMIN" ? "admin" : "assets");
         return;
       }
       setActiveTab(tabParam as any);
+    } else if (!tabParam && user) {
+      if (role === "SUPER_ADMIN") {
+        setActiveTab("users");
+      } else if (role === "IT_ADMIN") {
+        setActiveTab("admin");
+      } else {
+        setActiveTab("assets");
+      }
     }
-  }, [searchParams, role]);
+  }, [searchParams, role, user]);
 
   const [search, setSearch] = useState("");
+  const [selectedCategoryFilter, setSelectedCategoryFilter] = useState<string>("ALL");
   
   // Modals
   const [selectedAssetForQR, setSelectedAssetForQR] = useState<Asset | null>(null);
   const [selectedAssetForBorrow, setSelectedAssetForBorrow] = useState<Asset | null>(null);
   const [isBorrowModalOpen, setIsBorrowModalOpen] = useState(false);
   const [isNewAssetModalOpen, setIsNewAssetModalOpen] = useState(false);
+  const [isCategoryModalOpen, setIsCategoryModalOpen] = useState(false);
+  const [isCameraScannerOpen, setIsCameraScannerOpen] = useState(false);
   const [inspectionState, setInspectionState] = useState<{ mode: "HANDOVER" | "RETURN"; request: BorrowRequest } | null>(null);
-  const [isAuthModalOpen, setIsAuthModalOpen] = useState(false);
-  const [authModalMode, setAuthModalMode] = useState<"LOGIN" | "REGISTER">("LOGIN");
+
+  // Rejection dialog
+  const [rejectingRequest, setRejectingRequest] = useState<BorrowRequest | null>(null);
+  const [rejectionReason, setRejectionReason] = useState("");
 
   // Forms
   const [purpose, setPurpose] = useState("");
-  const [startDate, setStartDate] = useState("2026-09-02T09:00");
-  const [endDate, setEndDate] = useState("2026-09-05T18:00");
+  const [dynamicFormData, setDynamicFormData] = useState<Record<string, any>>({});
+  const [startDate, setStartDate] = useState(() => {
+    const d = new Date();
+    d.setDate(d.getDate() + 1);
+    d.setHours(9, 0, 0, 0);
+    return d.toISOString().slice(0, 16);
+  });
+  const [endDate, setEndDate] = useState(() => {
+    const d = new Date();
+    d.setDate(d.getDate() + 3);
+    d.setHours(18, 0, 0, 0);
+    return d.toISOString().slice(0, 16);
+  });
   const [formError, setFormError] = useState("");
   const [formSuccess, setFormSuccess] = useState("");
 
+  // New Asset Form
   const [newAssetTag, setNewAssetTag] = useState("");
   const [newAssetName, setNewAssetName] = useState("");
   const [newAssetBrand, setNewAssetBrand] = useState("");
   const [newAssetModel, setNewAssetModel] = useState("");
+  const [newAssetCategoryID, setNewAssetCategoryID] = useState("");
 
-  // 1. Fetch Analytics KPI Summary
+  // 1. Fetch Categories
+  const { data: categoriesData } = useQuery<{ data: Category[] }>({
+    queryKey: ["categories"],
+    queryFn: async () => {
+      const res = await apiClient.get("/categories");
+      return res.data;
+    },
+  });
+
+  const categories = categoriesData?.data || [];
+
+  // 2. Fetch Analytics KPI Summary
   const { data: analyticsData } = useQuery({
     queryKey: ["analytics-dashboard", role],
     queryFn: async () => {
@@ -110,16 +149,16 @@ function DashboardContent() {
     retry: false,
   });
 
-  // 2. Fetch Assets
+  // 3. Fetch Assets
   const { data: assetsData, isLoading: isAssetsLoading } = useQuery({
     queryKey: ["assets", search],
     queryFn: async () => {
-      const res = await apiClient.get("/assets", { params: { search, limit: 30 } });
+      const res = await apiClient.get("/assets", { params: { search, limit: 50 } });
       return res.data;
     },
   });
 
-  // 3. Fetch Borrow Requests
+  // 4. Fetch Borrow Requests
   const { data: requestsData, isLoading: isRequestsLoading } = useQuery({
     queryKey: ["borrow-requests", role],
     queryFn: async () => {
@@ -128,7 +167,7 @@ function DashboardContent() {
     },
   });
 
-  // 4. Fetch Audit Logs
+  // 5. Fetch Audit Logs
   const { data: auditLogsData } = useQuery({
     queryKey: ["audit-logs", role],
     queryFn: async () => {
@@ -144,8 +183,8 @@ function DashboardContent() {
     enabled: role !== "EMPLOYEE",
   });
 
-  // 5. Fetch Users (for Super Admin & IT Admin)
-  const { data: usersData, isLoading: isUsersLoading } = useQuery({
+  // 6. Fetch Users (for Super Admin & IT Admin)
+  const { data: usersData } = useQuery({
     queryKey: ["users-list", role],
     queryFn: async () => {
       if (role === "EMPLOYEE") return { data: [] };
@@ -191,9 +230,9 @@ function DashboardContent() {
     },
   });
 
-  // Mutations
+  // Create Borrow Request Mutation
   const createBorrowMutation = useMutation({
-    mutationFn: async (payload: { asset_id: string; purpose: string; start_date: string; end_date: string }) => {
+    mutationFn: async (payload: { asset_id: string; purpose: string; request_data: any; start_date: string; end_date: string }) => {
       const res = await apiClient.post("/borrow-requests", payload);
       return res.data;
     },
@@ -202,10 +241,12 @@ function DashboardContent() {
       setFormError("");
       queryClient.invalidateQueries({ queryKey: ["borrow-requests"] });
       queryClient.invalidateQueries({ queryKey: ["analytics-dashboard"] });
+      queryClient.invalidateQueries({ queryKey: ["notifications"] });
       setTimeout(() => {
         setIsBorrowModalOpen(false);
         setFormSuccess("");
         setPurpose("");
+        setDynamicFormData({});
       }, 1200);
     },
     onError: (err: any) => {
@@ -213,6 +254,7 @@ function DashboardContent() {
     },
   });
 
+  // Create Asset Mutation
   const createAssetMutation = useMutation({
     mutationFn: async (payload: any) => {
       const res = await apiClient.post("/assets", payload);
@@ -232,17 +274,22 @@ function DashboardContent() {
     },
   });
 
+  // Review Borrow Request Mutation
   const reviewMutation = useMutation({
-    mutationFn: async ({ id, status }: { id: string; status: string }) => {
-      const res = await apiClient.post(`/borrow-requests/${id}/review`, { status });
+    mutationFn: async ({ id, status, rejection_reason }: { id: string; status: string; rejection_reason?: string }) => {
+      const res = await apiClient.post(`/borrow-requests/${id}/review`, { status, rejection_reason });
       return res.data;
     },
     onSuccess: () => {
+      setRejectingRequest(null);
+      setRejectionReason("");
       queryClient.invalidateQueries({ queryKey: ["borrow-requests"] });
       queryClient.invalidateQueries({ queryKey: ["analytics-dashboard"] });
+      queryClient.invalidateQueries({ queryKey: ["notifications"] });
     },
   });
 
+  // Handover / Return Inspection Mutation
   const inspectionMutation = useMutation({
     mutationFn: async (payload: { mode: "HANDOVER" | "RETURN"; requestID: string; data: any }) => {
       const endpoint = payload.mode === "HANDOVER" ? "handover" : "return";
@@ -255,6 +302,7 @@ function DashboardContent() {
       queryClient.invalidateQueries({ queryKey: ["assets"] });
       queryClient.invalidateQueries({ queryKey: ["analytics-dashboard"] });
       queryClient.invalidateQueries({ queryKey: ["audit-logs"] });
+      queryClient.invalidateQueries({ queryKey: ["notifications"] });
     },
     onError: (err: any) => {
       alert(err.response?.data?.error || "Inspection process failed");
@@ -281,6 +329,30 @@ function DashboardContent() {
     utilization_rate: utilization,
   };
 
+  // Filtered Assets by category
+  const filteredAssets = allAssets.filter((a) => {
+    if (selectedCategoryFilter !== "ALL" && a.category_id !== selectedCategoryFilter) {
+      return false;
+    }
+    return true;
+  });
+
+  // Handle QR Camera Scan
+  const handleCameraScanResult = (tagOrID: string) => {
+    setSearch(tagOrID);
+    // Find matching asset
+    const match = allAssets.find((a) => a.asset_tag.toLowerCase() === tagOrID.toLowerCase() || a.id === tagOrID);
+    if (match) {
+      setActiveTab("assets");
+    }
+  };
+
+  // Selected Category Form Fields for Borrow Modal
+  const activeCategory = selectedAssetForBorrow
+    ? categories.find((c) => c.id === selectedAssetForBorrow.category_id) || selectedAssetForBorrow.category
+    : null;
+  const requiredFormFields = activeCategory?.required_form_fields || [];
+
   return (
     <div className="flex h-screen bg-slate-50 overflow-hidden text-slate-800 font-sans">
       {/* Sidebar (Clean White with Emerald Accent) */}
@@ -292,19 +364,21 @@ function DashboardContent() {
               <Laptop className="h-5 w-5 text-white" />
             </div>
             <div>
-              <h1 className="font-extrabold text-lg tracking-tight text-slate-900 flex items-center gap-1.5">
+              <h1 className="font-extrabold text-base tracking-tight text-slate-900 flex items-center gap-1">
                 EquipFlow
-                <Sparkles className="h-3.5 w-3.5 text-emerald-500 fill-emerald-500" />
+                <Sparkles className="h-3 w-3 text-emerald-500 fill-emerald-500" />
               </h1>
-              <p className="text-[10px] text-emerald-600 font-bold tracking-widest uppercase">IT Asset Platform</p>
+              <p className="text-[10px] text-emerald-700 font-semibold tracking-wider uppercase">
+                IT Asset Lifecycle
+              </p>
             </div>
           </div>
 
           {/* Navigation Links */}
-          <nav className="space-y-1.5">
+          <nav className="space-y-1">
             <button
               onClick={() => setActiveTab("dashboard")}
-              className={`w-full flex items-center gap-3 px-3 py-2.5 rounded-xl text-xs font-semibold transition-all ${
+              className={`w-full flex items-center gap-3 px-3 py-2.5 rounded-xl text-xs font-semibold transition-all cursor-pointer ${
                 activeTab === "dashboard"
                   ? "bg-emerald-50 text-emerald-700 border border-emerald-200/80 font-bold shadow-xs"
                   : "text-slate-600 hover:text-slate-900 hover:bg-slate-50"
@@ -316,7 +390,7 @@ function DashboardContent() {
 
             <button
               onClick={() => setActiveTab("assets")}
-              className={`w-full flex items-center gap-3 px-3 py-2.5 rounded-xl text-xs font-semibold transition-all ${
+              className={`w-full flex items-center gap-3 px-3 py-2.5 rounded-xl text-xs font-semibold transition-all cursor-pointer ${
                 activeTab === "assets"
                   ? "bg-emerald-50 text-emerald-700 border border-emerald-200/80 font-bold shadow-xs"
                   : "text-slate-600 hover:text-slate-900 hover:bg-slate-50"
@@ -328,7 +402,7 @@ function DashboardContent() {
 
             <button
               onClick={() => setActiveTab("requests")}
-              className={`w-full flex items-center gap-3 px-3 py-2.5 rounded-xl text-xs font-semibold transition-all ${
+              className={`w-full flex items-center gap-3 px-3 py-2.5 rounded-xl text-xs font-semibold transition-all cursor-pointer ${
                 activeTab === "requests"
                   ? "bg-emerald-50 text-emerald-700 border border-emerald-200/80 font-bold shadow-xs"
                   : "text-slate-600 hover:text-slate-900 hover:bg-slate-50"
@@ -341,21 +415,28 @@ function DashboardContent() {
             {role !== "EMPLOYEE" && (
               <button
                 onClick={() => setActiveTab("admin")}
-                className={`w-full flex items-center gap-3 px-3 py-2.5 rounded-xl text-xs font-semibold transition-all ${
+                className={`w-full flex items-center justify-between px-3 py-2.5 rounded-xl text-xs font-semibold transition-all cursor-pointer ${
                   activeTab === "admin"
                     ? "bg-emerald-50 text-emerald-700 border border-emerald-200/80 font-bold shadow-xs"
                     : "text-slate-600 hover:text-slate-900 hover:bg-slate-50"
                 }`}
               >
-                <ShieldCheck className={`h-4 w-4 ${activeTab === "admin" ? "text-emerald-600" : "text-slate-400"}`} />
-                <span>งานส่งมอบ & รับคืน (Dispatch)</span>
+                <div className="flex items-center gap-3">
+                  <ShieldCheck className={`h-4 w-4 ${activeTab === "admin" ? "text-emerald-600" : "text-slate-400"}`} />
+                  <span>งานส่งมอบ & รับคืน (Dispatch)</span>
+                </div>
+                {pendingCount > 0 && (
+                  <span className="px-1.5 py-0.2 rounded-full bg-amber-100 text-amber-800 text-[10px] font-extrabold">
+                    {pendingCount}
+                  </span>
+                )}
               </button>
             )}
 
             {role !== "EMPLOYEE" && (
               <button
                 onClick={() => setActiveTab("audit")}
-                className={`w-full flex items-center gap-3 px-3 py-2.5 rounded-xl text-xs font-semibold transition-all ${
+                className={`w-full flex items-center gap-3 px-3 py-2.5 rounded-xl text-xs font-semibold transition-all cursor-pointer ${
                   activeTab === "audit"
                     ? "bg-emerald-50 text-emerald-700 border border-emerald-200/80 font-bold shadow-xs"
                     : "text-slate-600 hover:text-slate-900 hover:bg-slate-50"
@@ -370,7 +451,7 @@ function DashboardContent() {
             {role === "SUPER_ADMIN" && (
               <button
                 onClick={() => setActiveTab("users")}
-                className={`w-full flex items-center gap-3 px-3 py-2.5 rounded-xl text-xs font-semibold transition-all ${
+                className={`w-full flex items-center gap-3 px-3 py-2.5 rounded-xl text-xs font-semibold transition-all cursor-pointer ${
                   activeTab === "users"
                     ? "bg-emerald-50 text-emerald-700 border border-emerald-200/80 font-bold shadow-xs"
                     : "text-slate-600 hover:text-slate-900 hover:bg-slate-50"
@@ -418,45 +499,55 @@ function DashboardContent() {
           </div>
 
           <div className="flex items-center gap-3">
+            {/* Camera QR Scanner Button */}
+            <button
+              onClick={() => setIsCameraScannerOpen(true)}
+              className="flex items-center gap-1.5 px-3 py-2 rounded-xl text-xs font-bold text-emerald-700 bg-emerald-50 hover:bg-emerald-100 border border-emerald-200 transition cursor-pointer"
+              title="เปิดกล้องสแกน QR Code"
+            >
+              <Camera className="h-4 w-4 text-emerald-600" />
+              <span className="hidden sm:inline">สแกนด้วยกล้อง</span>
+            </button>
+
+            {/* Category Manager (for Admin) */}
+            {role !== "EMPLOYEE" && (
+              <button
+                onClick={() => setIsCategoryModalOpen(true)}
+                className="flex items-center gap-1.5 px-3 py-2 rounded-xl text-xs font-bold text-slate-700 bg-slate-100 hover:bg-slate-200 border border-slate-200 transition cursor-pointer"
+                title="จัดการหมวดหมู่และ Dynamic Schema"
+              >
+                <Settings2 className="h-4 w-4 text-slate-600" />
+                <span className="hidden sm:inline">ตั้งค่าหมวดหมู่</span>
+              </button>
+            )}
+
+            {/* Register Asset Button */}
             {activeTab === "assets" && role !== "EMPLOYEE" && (
               <button
                 onClick={() => setIsNewAssetModalOpen(true)}
                 className="flex items-center gap-2 bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-semibold px-4 py-2 rounded-xl shadow-sm shadow-emerald-600/20 transition cursor-pointer"
               >
                 <PlusCircle className="h-4 w-4" />
-                ลงทะเบียนอุปกรณ์ใหม่
+                ลงทะเบียนอุปกรณ์
               </button>
             )}
 
-            {/* User Profile & Sign Out Button */}
-            {user ? (
-              <div className="flex items-center gap-3">
-                <div className="text-right hidden sm:block">
-                  <p className="text-xs font-bold text-slate-800">{user.full_name}</p>
-                  <p className="text-[10px] text-emerald-600 font-mono font-semibold">{user.role}</p>
-                </div>
-                <button
-                  onClick={async () => {
-                    await signOut();
-                    router.replace("/login");
-                  }}
-                  className="flex items-center gap-1.5 px-3 py-2 rounded-xl text-xs font-semibold text-rose-700 bg-rose-50 hover:bg-rose-100 border border-rose-200 transition cursor-pointer"
-                  title="ออกจากระบบ"
-                >
-                  <LogOut className="h-4 w-4" />
-                  <span>ออกจากระบบ</span>
-                </button>
-              </div>
-            ) : (
-              <div className="flex items-center gap-2">
-                <Link
-                  href="/login"
-                  className="flex items-center gap-1.5 px-3.5 py-2 rounded-xl text-xs font-semibold text-white bg-emerald-600 hover:bg-emerald-500 shadow-sm shadow-emerald-600/20 transition cursor-pointer"
-                >
-                  <LogIn className="h-4 w-4" />
-                  <span>เข้าสู่ระบบ</span>
-                </Link>
-              </div>
+            {/* In-App Notifications Bell */}
+            <NotificationBell />
+
+            {/* User Sign Out */}
+            {user && (
+              <button
+                onClick={async () => {
+                  await signOut();
+                  router.replace("/login");
+                }}
+                className="flex items-center gap-1.5 px-3 py-2 rounded-xl text-xs font-semibold text-rose-700 bg-rose-50 hover:bg-rose-100 border border-rose-200 transition cursor-pointer"
+                title="ออกจากระบบ"
+              >
+                <LogOut className="h-4 w-4" />
+                <span className="hidden md:inline">ออกจากระบบ</span>
+              </button>
             )}
           </div>
         </header>
@@ -522,37 +613,40 @@ function DashboardContent() {
 
               {/* Category Breakdown & Recent Activity */}
               <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
-                {/* Category Inventory */}
+                {/* Category Inventory Breakdown */}
                 <div className="lg:col-span-1 p-6 rounded-2xl bg-white border border-slate-200/80 shadow-xs space-y-4">
-                  <h3 className="font-bold text-sm text-slate-900 flex items-center gap-2">
-                    <Layers className="h-4 w-4 text-emerald-600" />
-                    หมวดหมู่อุปกรณ์ในระบบ
-                  </h3>
+                  <div className="flex items-center justify-between">
+                    <h3 className="font-bold text-sm text-slate-900 flex items-center gap-2">
+                      <Layers className="h-4 w-4 text-emerald-600" />
+                      หมวดหมู่อุปกรณ์ในระบบ
+                    </h3>
+                    <span className="text-[10px] font-bold text-emerald-700 bg-emerald-50 px-2 py-0.5 rounded-full">
+                      {categories.length} หมวดหมู่
+                    </span>
+                  </div>
+
                   <div className="space-y-3 pt-2">
-                    {analyticsData?.category_breakdown && analyticsData.category_breakdown.length > 0 ? (
-                      analyticsData.category_breakdown.map((cat: any, i: number) => (
-                        <div key={i} className="flex items-center justify-between p-3 rounded-xl bg-slate-50 border border-slate-100">
-                          <span className="text-xs font-bold text-slate-700">{cat.name}</span>
-                          <div className="flex items-center gap-2">
-                            <span className="text-xs font-mono font-bold text-slate-900">{cat.total} เครื่อง</span>
-                            <span className="text-[10px] px-2 py-0.5 rounded-full bg-emerald-100 text-emerald-800 font-semibold">
-                              ยืม {cat.borrowed || 0}
-                            </span>
+                    {categories.map((cat) => {
+                      const countInCat = allAssets.filter((a) => a.category_id === cat.id).length;
+                      const borrowedInCat = allAssets.filter((a) => a.category_id === cat.id && a.status === "BORROWED").length;
+                      const pct = countInCat > 0 ? (borrowedInCat / countInCat) * 100 : 0;
+
+                      return (
+                        <div key={cat.id} className="p-3.5 rounded-xl bg-slate-50 border border-slate-100 space-y-2">
+                          <div className="flex items-center justify-between">
+                            <span className="text-xs font-bold text-slate-800">{cat.name}</span>
+                            <span className="text-xs font-mono font-bold text-slate-900">{countInCat} เครื่อง</span>
+                          </div>
+                          <div className="flex items-center justify-between text-[10px] text-slate-500">
+                            <span>ถูกยืม {borrowedInCat} รายการ</span>
+                            <span>{pct.toFixed(0)}% กำลังใช้งาน</span>
+                          </div>
+                          <div className="w-full bg-slate-200 h-1.5 rounded-full overflow-hidden">
+                            <div className="bg-emerald-500 h-full rounded-full" style={{ width: `${pct}%` }}></div>
                           </div>
                         </div>
-                      ))
-                    ) : (
-                      <div className="text-center py-8 text-xs text-slate-400">
-                        {allAssets.length > 0 ? (
-                          <div className="space-y-2">
-                            <p className="font-semibold text-slate-600">อุปกรณ์ทั้งหมดในระบบ</p>
-                            <p className="text-lg font-extrabold text-emerald-600 font-mono">{totalAssetsCount} รายการ</p>
-                          </div>
-                        ) : (
-                          "ไม่มีข้อมูลหมวดหมู่อุปกรณ์"
-                        )}
-                      </div>
-                    )}
+                      );
+                    })}
                   </div>
                 </div>
 
@@ -564,7 +658,7 @@ function DashboardContent() {
                   </h3>
                   <div className="divide-y divide-slate-100">
                     {auditLogsData?.data && auditLogsData.data.length > 0 ? (
-                      auditLogsData.data.slice(0, 5).map((act: any, i: number) => (
+                      auditLogsData.data.slice(0, 6).map((act: any, i: number) => (
                         <div key={i} className="py-3 flex items-center justify-between first:pt-0 last:pb-0">
                           <div className="flex items-center gap-3">
                             <div className="h-8 w-8 rounded-lg bg-emerald-50 text-emerald-600 flex items-center justify-center font-bold text-xs">
@@ -593,19 +687,53 @@ function DashboardContent() {
             </div>
           )}
 
-          {/* TAB 1: ASSET CATALOG WITH QR CODES */}
+          {/* TAB 1: ASSET CATALOG WITH CATEGORY FILTER */}
           {activeTab === "assets" && (
             <div className="space-y-6">
-              {/* Search Bar */}
-              <div className="flex items-center gap-4 bg-white p-2 rounded-2xl border border-slate-200/80 shadow-xs">
-                <Search className="h-4 w-4 text-emerald-600 ml-3" />
-                <input
-                  type="text"
-                  value={search}
-                  onChange={(e) => setSearch(e.target.value)}
-                  placeholder="ค้นหาอุปกรณ์ด้วยรหัสทรัพย์สิน (Asset Tag), ยี่ห้อ, รุ่น, หรือชื่อ..."
-                  className="w-full bg-transparent p-2 text-xs text-slate-900 placeholder-slate-400 focus:outline-none"
-                />
+              {/* Search & Category Filter Bar */}
+              <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-3">
+                <div className="flex-1 flex items-center gap-3 bg-white p-2 rounded-2xl border border-slate-200/80 shadow-xs">
+                  <Search className="h-4 w-4 text-emerald-600 ml-2 shrink-0" />
+                  <input
+                    type="text"
+                    value={search}
+                    onChange={(e) => setSearch(e.target.value)}
+                    placeholder="ค้นหาอุปกรณ์ด้วยรหัสทรัพย์สิน (Asset Tag), ยี่ห้อ, รุ่น, หรือชื่อ..."
+                    className="w-full bg-transparent p-1 text-xs text-slate-900 placeholder-slate-400 focus:outline-none"
+                  />
+                  {search && (
+                    <button onClick={() => setSearch("")} className="text-slate-400 hover:text-slate-600 p-1">
+                      <X className="h-3.5 w-3.5" />
+                    </button>
+                  )}
+                </div>
+
+                {/* Category Pills Filter */}
+                <div className="flex items-center gap-1.5 overflow-x-auto pb-1 sm:pb-0">
+                  <button
+                    onClick={() => setSelectedCategoryFilter("ALL")}
+                    className={`px-3 py-2 rounded-xl text-xs font-bold transition cursor-pointer shrink-0 ${
+                      selectedCategoryFilter === "ALL"
+                        ? "bg-emerald-600 text-white shadow-xs"
+                        : "bg-white text-slate-600 border border-slate-200 hover:bg-slate-50"
+                    }`}
+                  >
+                    ทั้งหมด ({allAssets.length})
+                  </button>
+                  {categories.map((cat) => (
+                    <button
+                      key={cat.id}
+                      onClick={() => setSelectedCategoryFilter(cat.id)}
+                      className={`px-3 py-2 rounded-xl text-xs font-bold transition cursor-pointer shrink-0 ${
+                        selectedCategoryFilter === cat.id
+                          ? "bg-emerald-600 text-white shadow-xs"
+                          : "bg-white text-slate-600 border border-slate-200 hover:bg-slate-50"
+                      }`}
+                    >
+                      {cat.name}
+                    </button>
+                  ))}
+                </div>
               </div>
 
               {/* Grid of Assets */}
@@ -617,7 +745,7 @@ function DashboardContent() {
                 </div>
               ) : (
                 <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
-                  {assetsData?.data?.map((asset: Asset) => (
+                  {filteredAssets.map((asset: Asset) => (
                     <div
                       key={asset.id}
                       className="bg-white border border-slate-200/80 hover:border-emerald-400 rounded-2xl p-6 transition-all duration-200 flex flex-col justify-between shadow-xs hover:shadow-md"
@@ -630,7 +758,7 @@ function DashboardContent() {
                           <div className="flex items-center gap-2">
                             <button
                               onClick={() => setSelectedAssetForQR(asset)}
-                              className="p-1.5 rounded-lg bg-slate-100 hover:bg-emerald-50 hover:text-emerald-700 text-slate-600 transition"
+                              className="p-1.5 rounded-lg bg-slate-100 hover:bg-emerald-50 hover:text-emerald-700 text-slate-600 transition cursor-pointer"
                               title="พิมพ์ป้ายสติกเกอร์ QR Code"
                             >
                               <QrCode className="h-4 w-4" />
@@ -665,9 +793,10 @@ function DashboardContent() {
                           disabled={asset.status !== "AVAILABLE" || !asset.is_borrowable}
                           onClick={() => {
                             setSelectedAssetForBorrow(asset);
+                            setDynamicFormData({});
                             setIsBorrowModalOpen(true);
                           }}
-                          className={`w-full py-2.5 rounded-xl text-xs font-semibold flex items-center justify-center gap-2 transition cursor-pointer ${
+                          className={`w-full py-2.5 rounded-xl text-xs font-bold flex items-center justify-center gap-2 transition cursor-pointer ${
                             asset.status === "AVAILABLE" && asset.is_borrowable
                               ? "bg-emerald-600 hover:bg-emerald-500 text-white shadow-sm shadow-emerald-600/20"
                               : "bg-slate-100 text-slate-400 cursor-not-allowed"
@@ -694,7 +823,7 @@ function DashboardContent() {
                       <th className="px-6 py-4">Request No</th>
                       <th className="px-6 py-4">Equipment</th>
                       <th className="px-6 py-4">Borrow Period</th>
-                      <th className="px-6 py-4">Purpose</th>
+                      <th className="px-6 py-4">Purpose & Form Data</th>
                       <th className="px-6 py-4">Status</th>
                       <th className="px-6 py-4 text-right">Actions</th>
                     </tr>
@@ -713,8 +842,17 @@ function DashboardContent() {
                           <div>จาก: <span className="font-mono text-slate-800">{new Date(req.start_date).toLocaleDateString()}</span></div>
                           <div>ถึง: <span className="font-mono text-slate-800">{new Date(req.end_date).toLocaleDateString()}</span></div>
                         </td>
-                        <td className="px-6 py-4 text-slate-600 max-w-xs truncate">
-                          {req.purpose}
+                        <td className="px-6 py-4 text-slate-600 max-w-xs">
+                          <p className="font-semibold text-slate-800">{req.purpose}</p>
+                          {req.request_data && Object.keys(req.request_data).length > 0 && (
+                            <div className="mt-1 flex flex-wrap gap-1">
+                              {Object.entries(req.request_data).map(([k, v]) => (
+                                <span key={k} className="text-[10px] bg-slate-100 text-slate-700 px-1.5 py-0.2 rounded font-mono">
+                                  {k}: {String(v)}
+                                </span>
+                              ))}
+                            </div>
+                          )}
                         </td>
                         <td className="px-6 py-4">
                           <span
@@ -746,7 +884,7 @@ function DashboardContent() {
                                     <Check className="h-4 w-4" />
                                   </button>
                                   <button
-                                    onClick={() => reviewMutation.mutate({ id: req.id, status: "REJECTED" })}
+                                    onClick={() => setRejectingRequest(req)}
                                     className="p-1.5 rounded-lg bg-rose-50 text-rose-700 hover:bg-rose-100 border border-rose-200 transition cursor-pointer"
                                     title="ปฏิเสธคำขอ"
                                   >
@@ -840,11 +978,6 @@ function DashboardContent() {
                     </p>
                   </div>
                 </div>
-                <div className="text-right">
-                  <span className="text-xs font-mono font-bold bg-white text-emerald-800 px-3 py-1.5 rounded-xl border border-emerald-200 shadow-xs">
-                    บัญชีทั้งหมด: {usersData?.data?.length || 0} ท่าน
-                  </span>
-                </div>
               </div>
 
               {/* Users Table */}
@@ -852,83 +985,89 @@ function DashboardContent() {
                 <table className="w-full text-left text-sm text-slate-700">
                   <thead className="bg-slate-50 text-[11px] uppercase font-bold text-slate-500 border-b border-slate-200/80">
                     <tr>
-                      <th className="px-6 py-4">ผู้ใช้งาน (User)</th>
-                      <th className="px-6 py-4">อีเมลองค์กร</th>
-                      <th className="px-6 py-4">สิทธิ์ปัจจุบัน (Current Role)</th>
-                      <th className="px-6 py-4">สถานะ (Status)</th>
-                      <th className="px-6 py-4 text-right">กำหนดสิทธิ์ (Grant Role)</th>
+                      <th className="px-6 py-4">User</th>
+                      <th className="px-6 py-4">Current Role</th>
+                      <th className="px-6 py-4">Grant / Change Role</th>
+                      <th className="px-6 py-4">Account Status</th>
+                      <th className="px-6 py-4 text-right">Actions</th>
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-slate-100 text-xs">
                     {usersData?.data?.map((u: Profile) => (
                       <tr key={u.id} className="hover:bg-slate-50/80 transition">
                         <td className="px-6 py-4">
-                          <div className="flex items-center gap-3">
-                            <div className="h-8 w-8 rounded-lg bg-slate-100 text-slate-700 font-bold flex items-center justify-center text-xs">
-                              {u.role === "SUPER_ADMIN" ? "👑" : u.role === "IT_ADMIN" ? "🛡️" : "👤"}
-                            </div>
-                            <div>
-                              <p className="font-bold text-slate-900">{u.full_name}</p>
-                              <p className="text-[10px] font-mono text-slate-400">ID: {u.id.substring(0, 8)}...</p>
-                            </div>
-                          </div>
-                        </td>
-                        <td className="px-6 py-4 font-mono text-slate-600">
-                          {u.email}
+                          <p className="font-bold text-slate-900">{u.full_name}</p>
+                          <p className="text-[11px] text-slate-400 font-mono">{u.email}</p>
                         </td>
                         <td className="px-6 py-4">
                           <span
-                            className={`text-[10px] px-2.5 py-0.5 rounded-full font-bold border ${
+                            className={`text-[10px] px-2.5 py-1 rounded-full font-bold uppercase ${
                               u.role === "SUPER_ADMIN"
-                                ? "bg-purple-50 text-purple-700 border-purple-200"
+                                ? "bg-amber-100 text-amber-800 border border-amber-200"
                                 : u.role === "IT_ADMIN"
-                                ? "bg-emerald-50 text-emerald-700 border-emerald-200"
-                                : "bg-slate-100 text-slate-700 border-slate-200"
+                                ? "bg-emerald-100 text-emerald-800 border border-emerald-200"
+                                : "bg-slate-100 text-slate-700"
                             }`}
                           >
                             {u.role}
                           </span>
                         </td>
                         <td className="px-6 py-4">
+                          <div className="flex items-center gap-1.5">
+                            <button
+                              onClick={() => grantRoleMutation.mutate({ userId: u.id, newRole: "EMPLOYEE" })}
+                              className={`px-2 py-1 rounded-lg text-[10px] font-bold transition cursor-pointer ${
+                                u.role === "EMPLOYEE"
+                                  ? "bg-slate-800 text-white"
+                                  : "bg-slate-100 hover:bg-slate-200 text-slate-600"
+                              }`}
+                            >
+                              Employee
+                            </button>
+                            <button
+                              onClick={() => grantRoleMutation.mutate({ userId: u.id, newRole: "IT_ADMIN" })}
+                              className={`px-2 py-1 rounded-lg text-[10px] font-bold transition cursor-pointer ${
+                                u.role === "IT_ADMIN"
+                                  ? "bg-emerald-600 text-white"
+                                  : "bg-emerald-50 hover:bg-emerald-100 text-emerald-700 border border-emerald-200"
+                              }`}
+                            >
+                              IT Admin
+                            </button>
+                            <button
+                              onClick={() => grantRoleMutation.mutate({ userId: u.id, newRole: "SUPER_ADMIN" })}
+                              className={`px-2 py-1 rounded-lg text-[10px] font-bold transition cursor-pointer ${
+                                u.role === "SUPER_ADMIN"
+                                  ? "bg-amber-600 text-white"
+                                  : "bg-amber-50 hover:bg-amber-100 text-amber-700 border border-amber-200"
+                              }`}
+                            >
+                              Super Admin
+                            </button>
+                          </div>
+                        </td>
+                        <td className="px-6 py-4">
                           <span
-                            className={`text-[10px] px-2 py-0.5 rounded-md font-semibold ${
-                              u.is_active ? "bg-emerald-50 text-emerald-700" : "bg-rose-50 text-rose-700"
+                            className={`text-[10px] px-2 py-0.5 rounded-full font-bold ${
+                              u.is_active
+                                ? "bg-emerald-100 text-emerald-800"
+                                : "bg-rose-100 text-rose-800"
                             }`}
                           >
-                            {u.is_active ? "ใช้งานปกติ (Active)" : "ระงับการใช้ (Inactive)"}
+                            {u.is_active ? "Active" : "Deactivated"}
                           </span>
                         </td>
                         <td className="px-6 py-4 text-right">
-                          <div className="flex items-center justify-end gap-2">
-                            {/* Role Select Dropdown for Realtime Granting */}
-                            <select
-                              defaultValue={u.role}
-                              onChange={(e) => {
-                                const newRole = e.target.value as UserRole;
-                                if (confirm(`คุณต้องการเปลี่ยนสิทธิ์ของ "${u.full_name}" เป็น ${newRole} ใช่หรือไม่?`)) {
-                                  grantRoleMutation.mutate({ userId: u.id, newRole });
-                                }
-                              }}
-                              className="bg-slate-50 border border-slate-200 rounded-xl px-2.5 py-1.5 text-xs text-slate-800 font-semibold focus:outline-none focus:ring-2 focus:ring-emerald-500/20 focus:border-emerald-500 cursor-pointer"
-                            >
-                              <option value="EMPLOYEE">สิทธิ์ EMPLOYEE</option>
-                              <option value="IT_ADMIN">สิทธิ์ IT_ADMIN</option>
-                              <option value="SUPER_ADMIN">สิทธิ์ SUPER_ADMIN</option>
-                            </select>
-
-                            <button
-                              onClick={() => {
-                                toggleUserStatusMutation.mutate({ userId: u.id, isActive: !u.is_active });
-                              }}
-                              className={`px-2.5 py-1.5 rounded-xl text-xs font-semibold transition cursor-pointer border ${
-                                u.is_active
-                                  ? "bg-rose-50 text-rose-700 hover:bg-rose-100 border-rose-200"
-                                  : "bg-emerald-50 text-emerald-700 hover:bg-emerald-100 border-emerald-200"
-                              }`}
-                            >
-                              {u.is_active ? "ระงับสิทธิ์" : "เปิดใช้งาน"}
-                            </button>
-                          </div>
+                          <button
+                            onClick={() => toggleUserStatusMutation.mutate({ userId: u.id, isActive: !u.is_active })}
+                            className={`px-3 py-1 rounded-xl text-xs font-semibold transition cursor-pointer ${
+                              u.is_active
+                                ? "bg-rose-50 text-rose-700 hover:bg-rose-100 border border-rose-200"
+                                : "bg-emerald-50 text-emerald-700 hover:bg-emerald-100 border border-emerald-200"
+                            }`}
+                          >
+                            {u.is_active ? "ระงับสิทธิ์" : "เปิดใช้งาน"}
+                          </button>
                         </td>
                       </tr>
                     ))}
@@ -942,45 +1081,24 @@ function DashboardContent() {
 
       {/* QR Code Printable Modal */}
       {selectedAssetForQR && (
-        <QRCodeModal asset={selectedAssetForQR} onClose={() => setSelectedAssetForQR(null)} />
-      )}
-
-      {/* Inspection Handover/Return Modal */}
-      {inspectionState && (
-        <InspectionModal
-          mode={inspectionState.mode}
-          request={inspectionState.request}
-          isLoading={inspectionMutation.isPending}
-          onClose={() => setInspectionState(null)}
-          onSubmit={(data) =>
-            inspectionMutation.mutate({
-              mode: inspectionState.mode,
-              requestID: inspectionState.request.id,
-              data,
-            })
-          }
+        <QRCodeModal
+          asset={selectedAssetForQR}
+          onClose={() => setSelectedAssetForQR(null)}
         />
       )}
 
-      {/* Auth Modal (Login / Register) */}
-      <AuthModal
-        isOpen={isAuthModalOpen}
-        initialMode={authModalMode}
-        onClose={() => setIsAuthModalOpen(false)}
-      />
-
-      {/* Borrow Request Modal */}
+      {/* Dynamic Borrow Request Modal */}
       {isBorrowModalOpen && selectedAssetForBorrow && (
-        <div className="fixed inset-0 z-50 bg-slate-900/40 backdrop-blur-sm flex items-center justify-center p-4">
-          <div className="bg-white border border-slate-200 rounded-3xl w-full max-w-lg p-6 shadow-2xl space-y-5">
+        <div className="fixed inset-0 z-50 bg-slate-900/50 backdrop-blur-xs flex items-center justify-center p-4 animate-in fade-in duration-150">
+          <div className="bg-white border border-slate-200 rounded-3xl w-full max-w-lg p-6 shadow-2xl space-y-5 max-h-[90vh] flex flex-col">
             <div className="flex items-center justify-between border-b border-slate-100 pb-3">
               <div>
-                <h3 className="font-bold text-lg text-slate-900">Equipment Reservation</h3>
-                <p className="text-xs text-emerald-600 font-mono font-medium">
+                <h3 className="font-bold text-lg text-slate-900">ยื่นคำขอยืมอุปกรณ์ (Equipment Reservation)</h3>
+                <p className="text-xs text-emerald-600 font-mono font-bold">
                   {selectedAssetForBorrow.name} ({selectedAssetForBorrow.asset_tag})
                 </p>
               </div>
-              <button onClick={() => setIsBorrowModalOpen(false)} className="text-slate-400 hover:text-slate-600">✕</button>
+              <button onClick={() => setIsBorrowModalOpen(false)} className="h-8 w-8 rounded-full bg-slate-100 hover:bg-slate-200 text-slate-500 flex items-center justify-center transition cursor-pointer">✕</button>
             </div>
 
             {formError && (
@@ -1003,17 +1121,18 @@ function DashboardContent() {
                 createBorrowMutation.mutate({
                   asset_id: selectedAssetForBorrow.id,
                   purpose,
+                  request_data: dynamicFormData,
                   start_date: new Date(startDate).toISOString(),
                   end_date: new Date(endDate).toISOString(),
                 });
               }}
-              className="space-y-4"
+              className="space-y-4 flex-1 overflow-y-auto pr-1"
             >
               <div>
-                <label className="block text-xs font-semibold text-slate-700 mb-1.5">วัตถุประสงค์ในการใช้งาน / โปรเจกต์</label>
+                <label className="block text-xs font-bold text-slate-700 mb-1.5">วัตถุประสงค์ในการใช้งาน</label>
                 <textarea
                   required
-                  rows={3}
+                  rows={2}
                   value={purpose}
                   onChange={(e) => setPurpose(e.target.value)}
                   placeholder="ระบุเหตุผลหรือโปรเจกต์ที่ต้องนำอุปกรณ์ไปใช้งาน..."
@@ -1021,9 +1140,63 @@ function DashboardContent() {
                 />
               </div>
 
+              {/* Category Dynamic Form Fields */}
+              {requiredFormFields.length > 0 && (
+                <div className="p-4 bg-emerald-50/50 rounded-2xl border border-emerald-100 space-y-3">
+                  <h4 className="text-xs font-bold text-emerald-950 flex items-center gap-1.5">
+                    <Sparkles className="h-3.5 w-3.5 text-emerald-600" />
+                    <span>ข้อมูลเฉพาะหมวดหมู่ ({activeCategory?.name})</span>
+                  </h4>
+                  <div className="space-y-3 pt-1">
+                    {requiredFormFields.map((field) => (
+                      <div key={field.name}>
+                        <label className="block text-xs font-semibold text-slate-700 mb-1">
+                          {field.label} {field.required && <span className="text-rose-500">*</span>}
+                        </label>
+                        {field.type === "checkbox" ? (
+                          <label className="flex items-center gap-2 bg-white p-2.5 rounded-xl border border-emerald-100 cursor-pointer">
+                            <input
+                              type="checkbox"
+                              checked={dynamicFormData[field.name] || false}
+                              onChange={(e) =>
+                                setDynamicFormData({ ...dynamicFormData, [field.name]: e.target.checked })
+                              }
+                              className="h-4 w-4 rounded accent-emerald-600"
+                            />
+                            <span className="text-xs text-slate-700">{field.label}</span>
+                          </label>
+                        ) : field.type === "number" ? (
+                          <input
+                            type="number"
+                            required={field.required}
+                            placeholder={field.placeholder || "ระบุตัวเลข..."}
+                            value={dynamicFormData[field.name] || ""}
+                            onChange={(e) =>
+                              setDynamicFormData({ ...dynamicFormData, [field.name]: parseFloat(e.target.value) || 0 })
+                            }
+                            className="w-full bg-white border border-emerald-100 rounded-xl p-2.5 text-xs text-slate-800 focus:ring-2 focus:ring-emerald-500/20 focus:border-emerald-500"
+                          />
+                        ) : (
+                          <input
+                            type="text"
+                            required={field.required}
+                            placeholder={field.placeholder || "ระบุข้อมูล..."}
+                            value={dynamicFormData[field.name] || ""}
+                            onChange={(e) =>
+                              setDynamicFormData({ ...dynamicFormData, [field.name]: e.target.value })
+                            }
+                            className="w-full bg-white border border-emerald-100 rounded-xl p-2.5 text-xs text-slate-800 focus:ring-2 focus:ring-emerald-500/20 focus:border-emerald-500"
+                          />
+                        )}
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
+
               <div className="grid grid-cols-2 gap-3">
                 <div>
-                  <label className="block text-xs font-semibold text-slate-700 mb-1.5">วัน-เวลา เริ่มต้น</label>
+                  <label className="block text-xs font-bold text-slate-700 mb-1.5">วัน-เวลา เริ่มต้น</label>
                   <input
                     type="datetime-local"
                     required
@@ -1033,7 +1206,7 @@ function DashboardContent() {
                   />
                 </div>
                 <div>
-                  <label className="block text-xs font-semibold text-slate-700 mb-1.5">วัน-เวลา สิ้นสุด</label>
+                  <label className="block text-xs font-bold text-slate-700 mb-1.5">วัน-เวลา สิ้นสุด</label>
                   <input
                     type="datetime-local"
                     required
@@ -1048,14 +1221,14 @@ function DashboardContent() {
                 <button
                   type="button"
                   onClick={() => setIsBorrowModalOpen(false)}
-                  className="px-4 py-2 rounded-xl text-xs font-medium text-slate-600 hover:bg-slate-100 transition"
+                  className="px-4 py-2 rounded-xl text-xs font-semibold text-slate-600 hover:bg-slate-100 transition cursor-pointer"
                 >
                   ยกเลิก
                 </button>
                 <button
                   type="submit"
                   disabled={createBorrowMutation.isPending}
-                  className="px-5 py-2 rounded-xl text-xs font-semibold bg-emerald-600 hover:bg-emerald-500 text-white shadow-sm shadow-emerald-600/20 transition cursor-pointer"
+                  className="px-5 py-2 rounded-xl text-xs font-bold bg-emerald-600 hover:bg-emerald-500 text-white shadow-sm shadow-emerald-600/20 transition cursor-pointer"
                 >
                   {createBorrowMutation.isPending ? "กำลังส่งคำขอ..." : "ยืนยันการจอง"}
                 </button>
@@ -1067,12 +1240,13 @@ function DashboardContent() {
 
       {/* Add New Asset Modal */}
       {isNewAssetModalOpen && (
-        <div className="fixed inset-0 z-50 bg-slate-900/40 backdrop-blur-sm flex items-center justify-center p-4">
+        <div className="fixed inset-0 z-50 bg-slate-900/50 backdrop-blur-xs flex items-center justify-center p-4 animate-in fade-in duration-150">
           <div className="bg-white border border-slate-200 rounded-3xl w-full max-w-md p-6 shadow-2xl space-y-4">
             <div className="flex items-center justify-between border-b border-slate-100 pb-3">
-              <h3 className="font-bold text-sm text-slate-900">ลงทะเบียนอุปกรณ์ใหม่ (Register Asset)</h3>
+              <h3 className="font-bold text-base text-slate-900">ลงทะเบียนอุปกรณ์ใหม่ (Add Asset)</h3>
               <button onClick={() => setIsNewAssetModalOpen(false)} className="text-slate-400 hover:text-slate-600">✕</button>
             </div>
+
             <form
               onSubmit={(e) => {
                 e.preventDefault();
@@ -1081,6 +1255,7 @@ function DashboardContent() {
                   name: newAssetName,
                   brand: newAssetBrand,
                   model: newAssetModel,
+                  category_id: newAssetCategoryID || undefined,
                   status: "AVAILABLE",
                   current_condition: "EXCELLENT",
                   is_borrowable: true,
@@ -1089,71 +1264,165 @@ function DashboardContent() {
               className="space-y-3"
             >
               <div>
-                <label className="text-xs text-slate-700 font-semibold">รหัสทรัพย์สิน (Asset Tag) *</label>
+                <label className="block text-xs font-bold text-slate-700 mb-1">รหัสทรัพย์สิน (Asset Tag) *</label>
                 <input
                   required
-                  placeholder="เช่น IT-2026-LENOVO-01"
+                  type="text"
+                  placeholder="เช่น IT-2026-00003"
                   value={newAssetTag}
                   onChange={(e) => setNewAssetTag(e.target.value)}
-                  className="w-full bg-slate-50 border border-slate-200 rounded-xl p-2 text-xs text-slate-800 focus:outline-none focus:ring-2 focus:ring-emerald-500/20 focus:border-emerald-500"
+                  className="w-full bg-slate-50 border border-slate-200 rounded-xl p-2.5 text-xs text-slate-800 focus:outline-none focus:ring-2 focus:ring-emerald-500/20 focus:border-emerald-500 font-mono"
                 />
               </div>
+
               <div>
-                <label className="text-xs text-slate-700 font-semibold">ชื่ออุปกรณ์ *</label>
+                <label className="block text-xs font-bold text-slate-700 mb-1">ชื่ออุปกรณ์ *</label>
                 <input
                   required
-                  placeholder="เช่น ThinkPad X1 Carbon Gen 12"
+                  type="text"
+                  placeholder="เช่น MacBook Pro 16 M3 Max"
                   value={newAssetName}
                   onChange={(e) => setNewAssetName(e.target.value)}
-                  className="w-full bg-slate-50 border border-slate-200 rounded-xl p-2 text-xs text-slate-800 focus:outline-none focus:ring-2 focus:ring-emerald-500/20 focus:border-emerald-500"
+                  className="w-full bg-slate-50 border border-slate-200 rounded-xl p-2.5 text-xs text-slate-800 focus:outline-none focus:ring-2 focus:ring-emerald-500/20 focus:border-emerald-500"
                 />
               </div>
-              <div className="grid grid-cols-2 gap-2">
+
+              <div>
+                <label className="block text-xs font-bold text-slate-700 mb-1">หมวดหมู่อุปกรณ์</label>
+                <select
+                  value={newAssetCategoryID}
+                  onChange={(e) => setNewAssetCategoryID(e.target.value)}
+                  className="w-full bg-slate-50 border border-slate-200 rounded-xl p-2.5 text-xs text-slate-800 focus:outline-none focus:ring-2 focus:ring-emerald-500/20 focus:border-emerald-500"
+                >
+                  <option value="">-- เลือกหมวดหมู่ --</option>
+                  {categories.map((c) => (
+                    <option key={c.id} value={c.id}>
+                      {c.name}
+                    </option>
+                  ))}
+                </select>
+              </div>
+
+              <div className="grid grid-cols-2 gap-3">
                 <div>
-                  <label className="text-xs text-slate-700 font-semibold">ยี่ห้อ (Brand)</label>
+                  <label className="block text-xs font-bold text-slate-700 mb-1">ยี่ห้อ (Brand)</label>
                   <input
-                    placeholder="เช่น Lenovo"
+                    type="text"
+                    placeholder="Apple, Dell, Sony..."
                     value={newAssetBrand}
                     onChange={(e) => setNewAssetBrand(e.target.value)}
-                    className="w-full bg-slate-50 border border-slate-200 rounded-xl p-2 text-xs text-slate-800 focus:outline-none focus:ring-2 focus:ring-emerald-500/20 focus:border-emerald-500"
+                    className="w-full bg-slate-50 border border-slate-200 rounded-xl p-2.5 text-xs text-slate-800 focus:outline-none"
                   />
                 </div>
                 <div>
-                  <label className="text-xs text-slate-700 font-semibold">รุ่น (Model)</label>
+                  <label className="block text-xs font-bold text-slate-700 mb-1">รุ่น (Model)</label>
                   <input
-                    placeholder="เช่น X1 Carbon"
+                    type="text"
+                    placeholder="A2991, XPS 15..."
                     value={newAssetModel}
                     onChange={(e) => setNewAssetModel(e.target.value)}
-                    className="w-full bg-slate-50 border border-slate-200 rounded-xl p-2 text-xs text-slate-800 focus:outline-none focus:ring-2 focus:ring-emerald-500/20 focus:border-emerald-500"
+                    className="w-full bg-slate-50 border border-slate-200 rounded-xl p-2.5 text-xs text-slate-800 focus:outline-none"
                   />
                 </div>
               </div>
+
               <div className="pt-3 border-t border-slate-100 flex justify-end gap-2">
                 <button
                   type="button"
                   onClick={() => setIsNewAssetModalOpen(false)}
-                  className="px-4 py-2 text-xs font-medium text-slate-600 hover:bg-slate-100 rounded-xl transition"
+                  className="px-4 py-2 rounded-xl text-xs font-semibold text-slate-600 hover:bg-slate-100 transition cursor-pointer"
                 >
                   ยกเลิก
                 </button>
                 <button
                   type="submit"
-                  className="px-5 py-2 bg-emerald-600 hover:bg-emerald-500 text-white rounded-xl text-xs font-semibold shadow-sm shadow-emerald-600/20 transition cursor-pointer"
+                  disabled={createAssetMutation.isPending}
+                  className="px-5 py-2 rounded-xl text-xs font-bold bg-emerald-600 hover:bg-emerald-500 text-white shadow-sm shadow-emerald-600/20 transition cursor-pointer"
                 >
-                  บันทึกอุปกรณ์
+                  {createAssetMutation.isPending ? "กำลังบันทึก..." : "บันทึกอุปกรณ์"}
                 </button>
               </div>
             </form>
           </div>
         </div>
       )}
+
+      {/* Handover & Return Inspection Modal */}
+      {inspectionState && (
+        <InspectionModal
+          mode={inspectionState.mode}
+          request={inspectionState.request}
+          onClose={() => setInspectionState(null)}
+          onSubmit={(data) => {
+            inspectionMutation.mutate({
+              mode: inspectionState.mode,
+              requestID: inspectionState.request.id,
+              data,
+            });
+          }}
+          isLoading={inspectionMutation.isPending}
+        />
+      )}
+
+      {/* Rejection Reason Modal */}
+      {rejectingRequest && (
+        <div className="fixed inset-0 z-50 bg-slate-900/50 backdrop-blur-xs flex items-center justify-center p-4 animate-in fade-in duration-150">
+          <div className="bg-white border border-slate-200 rounded-3xl w-full max-w-md p-6 shadow-2xl space-y-4">
+            <h3 className="font-bold text-base text-rose-900 flex items-center gap-2">
+              <AlertCircle className="h-5 w-5 text-rose-600" />
+              ระบุเหตุผลในการปฏิเสธคำขอ #{rejectingRequest.request_number}
+            </h3>
+            <textarea
+              rows={3}
+              required
+              value={rejectionReason}
+              onChange={(e) => setRejectionReason(e.target.value)}
+              placeholder="เช่น อุปกรณ์ติดคิวซ่อมบำรุง, เอกสารไม่ครบถ้วน..."
+              className="w-full bg-slate-50 border border-slate-200 rounded-xl p-3 text-xs text-slate-800 placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-rose-500/20 focus:border-rose-500"
+            />
+            <div className="flex justify-end gap-2 pt-2 border-t border-slate-100">
+              <button
+                onClick={() => setRejectingRequest(null)}
+                className="px-4 py-2 text-xs font-semibold text-slate-600 hover:bg-slate-100 rounded-xl transition cursor-pointer"
+              >
+                ยกเลิก
+              </button>
+              <button
+                onClick={() =>
+                  reviewMutation.mutate({
+                    id: rejectingRequest.id,
+                    status: "REJECTED",
+                    rejection_reason: rejectionReason,
+                  })
+                }
+                className="px-4 py-2 text-xs font-bold bg-rose-600 hover:bg-rose-500 text-white rounded-xl shadow-xs transition cursor-pointer"
+              >
+                ยืนยันการปฏิเสธ
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Category Manager Modal */}
+      {isCategoryModalOpen && (
+        <CategoryManagerModal onClose={() => setIsCategoryModalOpen(false)} />
+      )}
+
+      {/* Camera QR Scanner Modal */}
+      {isCameraScannerOpen && (
+        <CameraQRScannerModal
+          onScan={handleCameraScanResult}
+          onClose={() => setIsCameraScannerOpen(false)}
+        />
+      )}
     </div>
   );
 }
 
-export default function Dashboard() {
+export default function DashboardPage() {
   return (
-    <Suspense fallback={<div className="min-h-screen bg-slate-50 flex items-center justify-center text-xs text-slate-500 font-semibold">กำลังโหลดข้อมูล EquipFlow...</div>}>
+    <Suspense fallback={<div className="h-screen w-screen flex items-center justify-center bg-slate-50 text-emerald-600 font-bold text-sm">กำลังโหลดระบบ EquipFlow...</div>}>
       <DashboardContent />
     </Suspense>
   );

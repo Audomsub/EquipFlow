@@ -1,203 +1,56 @@
-# EquipFlow API Routing & Endpoint Architecture Specification
+# EquipFlow API Endpoints & Route Reference Guide
 
-เอกสารระบุข้อมูลเส้นทาง Routing, HTTP Methods, Middleware Guards, Data Contracts, และ Status Codes ทั้งหมดของระบบ EquipFlow
-
----
-
-## 🌐 Base URL & Conventions
-- **Production URL:** `https://api.equipflow.local/api/v1`
-- **Local Dev Gateway:** `http://localhost:8081/api/v1`
-- **Frontend Reverse Proxy (Optional):** `/backend-api/*`
-- **Content-Type:** `application/json`
-- **Authorization Header:** `Bearer <Supabase_JWT_Token>`
-- **Dev Role Bypass Header:** `X-Dev-Role: <EMPLOYEE | IT_ADMIN | SUPER_ADMIN>`
+เอกสารระบุรายละเอียด RESTful API ทั้งหมดของระบบ EquipFlow (Go Fiber Clean Architecture) พร้อม Middleware Guards, Request Payloads, และ Expected Responses
 
 ---
 
-## 🛡️ Route Middleware Summary
+## 🛡️ Authentication & Authorization Headers
 
-| Middleware | หน้าที่ (Responsibility) | พฤติกรรมเมื่อไม่ผ่าน (On Failure) |
-| :--- | :--- | :--- |
-| `AuthMiddleware` | ตรวจสอบความถูกต้องของ Supabase JWT หรือ Dev Role | `401 Unauthorized` |
-| `RequireAdmin` | จำกัดสิทธิ์เฉพาะ `IT_ADMIN` และ `SUPER_ADMIN` | `403 Forbidden` |
-| `RequireSuperAdmin` | จำกัดสิทธิ์เฉพาะ `SUPER_ADMIN` สูงสุดเท่านั้น | `403 Forbidden` |
-
----
-
-## 📋 Comprehensive Routes Reference
-
-### 1. System Health & Diagnostics
-#### `GET /health`
-- **Access:** Public
-- **Description:** ตรวจสอบความพร้อมใช้งานของ Backend API และสถานะการเชื่อมต่อ Database Pool
-- **Response `200 OK`:**
-  ```json
-  {
-    "status": "healthy",
-    "app": "EquipFlow Backend API",
-    "database": "connected"
-  }
-  ```
+ทุก Endpoint (ยกเว้น `/health` และหน้า Auth) ต้องแนบ JWT Token:
+```http
+Authorization: Bearer <SUPABASE_ACCESS_TOKEN>
+```
 
 ---
 
-### 2. Authentication & Current Profile
-#### `GET /api/v1/auth/me`
-- **Access:** Authenticated (Any Role)
-- **Description:** ดึงข้อมูล Profile ของผู้ใช้งานที่กำลัง Login อยู่
-- **Response `200 OK`:**
-  ```json
-  {
-    "data": {
-      "id": "11111111-1111-1111-1111-111111111111",
-      "email": "admin@equipflow.local",
-      "full_name": "Super Administrator",
-      "role": "SUPER_ADMIN",
-      "is_active": true,
-      "created_at": "2026-08-31T09:00:00Z"
-    }
-  }
-  ```
+## 📡 API Endpoint Index
 
----
-
-### 3. Equipment Asset Catalog
-#### `GET /api/v1/assets`
-- **Access:** Authenticated (Any Role)
-- **Query Parameters:**
-  - `search`: string (ค้นหาตาม Tag, Name, Brand, Model)
-  - `category_id`: uuid
-  - `status`: string (`AVAILABLE`, `BORROWED`, `MAINTENANCE`)
-  - `page`: integer (default: 1)
-  - `limit`: integer (default: 30)
-- **Response `200 OK`:**
-  ```json
-  {
-    "data": [
-      {
-        "id": "uuid",
-        "asset_tag": "IT-2026-00001",
-        "name": "MacBook Pro 14 M3",
-        "brand": "Apple",
-        "model": "M3 Pro",
-        "status": "AVAILABLE",
-        "current_condition": "EXCELLENT",
-        "is_borrowable": true,
-        "location": { "id": "uuid", "name": "IT Storeroom Building A" },
-        "category": { "id": "uuid", "name": "Laptops & Notebooks" }
-      }
-    ],
-    "meta": { "total": 2001, "page": 1, "limit": 30 }
-  }
-  ```
-
-#### `GET /api/v1/assets/:id`
-- **Access:** Authenticated (Any Role)
-- **Response `200 OK`:** ข้อมูลรายละเอียดอุปกรณ์รายชิ้นพร้อมประวัติยืม
-
-#### `GET /api/v1/assets/scan/:tag`
-- **Access:** Authenticated (Any Role)
-- **Description:** สแกนค้นหาอุปกรณ์ด้วยรหัส Barcode/QR Code Tag (เช่น `IT-2026-00042`)
-
-#### `POST /api/v1/assets`
-- **Access:** IT_ADMIN & SUPER_ADMIN
-- **Payload:**
-  ```json
-  {
-    "asset_tag": "IT-2026-APPLE-09",
-    "name": "MacBook Air 15 M3",
-    "brand": "Apple",
-    "model": "MacBookAir15,2",
-    "category_id": "uuid",
-    "location_id": "uuid",
-    "serial_number": "C02XYZ12345",
-    "is_borrowable": true,
-    "current_condition": "EXCELLENT"
-  }
-  ```
-- **Response `201 Created`**
-
-#### `PUT /api/v1/assets/:id`
-- **Access:** IT_ADMIN & SUPER_ADMIN
-- **Description:** อัปเดตข้อมูลอุปกรณ์
-
-#### `DELETE /api/v1/assets/:id`
-- **Access:** SUPER_ADMIN Only
-- **Response `200 OK`:** `{"message": "Asset deleted successfully"}`
-
----
-
-### 4. Borrow Requests & Inspection Workflow
-#### `GET /api/v1/borrow-requests`
-- **Access:** Authenticated (พนักงานดูของตนเอง, Admin ดูทั้งหมด)
-- **Query Parameters:** `status`, `page`, `limit`
-
-#### `POST /api/v1/borrow-requests`
-- **Access:** Authenticated (Any Role)
-- **Payload:**
-  ```json
-  {
-    "asset_id": "uuid",
-    "purpose": "นำไปใช้งานนอกสถานที่ งานสัมมนาประจำปี",
-    "start_date": "2026-09-02T09:00:00Z",
-    "end_date": "2026-09-05T18:00:00Z"
-  }
-  ```
-- **Validation:** ตรวจสอบช่วงเวลาไม่ให้เกิดการจองทับซ้อน (Double Booking)
-- **Response `201 Created`**
-
-#### `POST /api/v1/borrow-requests/:id/review`
-- **Access:** IT_ADMIN & SUPER_ADMIN
-- **Payload:** `{"status": "APPROVED"}` หรือ `{"status": "REJECTED", "rejection_reason": "เหตุผล"}`
-
-#### `POST /api/v1/borrow-requests/:id/handover`
-- **Access:** IT_ADMIN & SUPER_ADMIN
-- **Payload (บันทึกส่งมอบพร้อมหลักฐาน):**
-  ```json
-  {
-    "condition": "EXCELLENT",
-    "notes": "ส่งมอบพร้อมสายชาร์จแท้และกระเป๋า",
-    "photos": ["https://...supabase.co/.../handover-01.jpg"]
-  }
-  ```
-
-#### `POST /api/v1/borrow-requests/:id/return`
-- **Access:** IT_ADMIN & SUPER_ADMIN
-- **Payload (ตรวจสภาพรับคืนและคิดค่าปรับ):**
-  ```json
-  {
-    "condition": "FAIR",
-    "notes": "จอภาพมีรอยขีดข่วนเล็กน้อย",
-    "photos": ["https://...supabase.co/.../return-01.jpg"],
-    "is_damaged": true,
-    "damage_fine_amount": 500
-  }
-  ```
-
----
-
-### 5. Analytics & Dashboard
-#### `GET /api/v1/analytics/dashboard`
-- **Access:** Authenticated
-- **Description:** สรุปตัวเลขสถิติภาพรวมผู้บริหาร (Total, Available, Borrowed, Maintenance, Utilization Rate, Category Breakdown)
-
-#### `GET /api/v1/analytics/my-stats`
-- **Access:** Authenticated
-- **Description:** สรุปสถิติการยืมของพนักงานที่ล็อกอินอยู่
-
----
-
-### 6. Super Admin User Management & RBAC
-#### `GET /api/v1/users`
-- **Access:** IT_ADMIN & SUPER_ADMIN
-- **Description:** เรียกดูรายชื่อผู้ใช้งานทั้งหมดในระบบ
-
-#### `POST /api/v1/users/:id/grant-role`
-- **Access:** SUPER_ADMIN Only
-- **Payload:** `{"role": "IT_ADMIN"}` (รองรับ `EMPLOYEE`, `IT_ADMIN`, `SUPER_ADMIN`)
-- **Audit:** บันทึกประวัติ `GRANT_PERMISSION` ลง `public.audit_logs`
-
-#### `POST /api/v1/users/:id/status`
-- **Access:** SUPER_ADMIN Only
-- **Payload:** `{"is_active": false}` (Suspend หรือ Activate บัญชี)
-- **Audit:** บันทึกประวัติ `TOGGLE_USER_STATUS`
+| Method | Endpoint | Description | Access Role |
+| :--- | :--- | :--- | :--- |
+| `GET` | `/health` | ตรวจสอบสถานะ Server และ Database Connection | Public |
+| `GET` | `/api/v1/auth/me` | ดึงข้อมูล Profile ผู้ใช้งานที่กำลัง Authenticated | Authenticated |
+| **Categories & Locations** | | | |
+| `GET` | `/api/v1/categories` | ดึงรายการหมวดหมู่ทั้งหมดและ Dynamic Form Schemas | Authenticated |
+| `GET` | `/api/v1/categories/:id` | ดึงข้อมูลหมวดหมู่รายชิ้น | Authenticated |
+| `POST` | `/api/v1/categories` | สร้างหมวดหมู่ใหม่และกำหนดฟิลด์ Dynamic | `IT_ADMIN`, `SUPER_ADMIN` |
+| `PUT` | `/api/v1/categories/:id` | แก้ไขหมวดหมู่และสคีมาแบบฟอร์ม/Checklist | `IT_ADMIN`, `SUPER_ADMIN` |
+| `DELETE`| `/api/v1/categories/:id` | ลบหมวดหมู่อุปกรณ์ | `SUPER_ADMIN` |
+| `GET` | `/api/v1/locations` | ดึงรายการสถานที่จัดเก็บทั้งหมด | Authenticated |
+| `POST` | `/api/v1/locations` | สร้างสถานที่จัดเก็บใหม่ | `IT_ADMIN`, `SUPER_ADMIN` |
+| **Notifications** | | | |
+| `GET` | `/api/v1/notifications` | ดึงรายการแจ้งเตือนของผู้ใช้งานที่ Login | Authenticated |
+| `POST` | `/api/v1/notifications/:id/read` | ทำเครื่องหมายว่าอ่านแล้วรายชิ้น | Authenticated |
+| `POST` | `/api/v1/notifications/read-all` | ทำเครื่องหมายว่าอ่านแล้วทั้งหมด | Authenticated |
+| **Asset Management** | | | |
+| `GET` | `/api/v1/assets` | ดึงรายการทรัพย์สินทั้งหมด (รองรับ Filter & Pagination) | Authenticated |
+| `GET` | `/api/v1/assets/:id` | ดึงข้อมูลอุปกรณ์ตาม UUID | Authenticated |
+| `GET` | `/api/v1/assets/scan/:tag` | ค้นหาอุปกรณ์ด้วย Asset Tag หรือ QR Code Payload | Authenticated |
+| `POST` | `/api/v1/assets` | ลงทะเบียนทรัพย์สินใหม่ | `IT_ADMIN`, `SUPER_ADMIN` |
+| `PUT` | `/api/v1/assets/:id` | อัปเดตข้อมูลทรัพย์สิน | `IT_ADMIN`, `SUPER_ADMIN` |
+| `DELETE`| `/api/v1/assets/:id` | ลบทรัพย์สินออกจากระบบ | `SUPER_ADMIN` |
+| **Borrowing & Reservation** | | | |
+| `POST` | `/api/v1/borrow-requests` | ยื่นคำขอยืมอุปกรณ์ (พร้อม Dynamic `request_data`) | Authenticated |
+| `GET` | `/api/v1/borrow-requests` | ดึงรายการคำขอยืม (ตามสิทธิ์ผู้ใช้งาน) | Authenticated |
+| `GET` | `/api/v1/borrow-requests/:id` | ดึงรายละเอียดคำขอยืมและผลการตรวจสภาพ | Authenticated |
+| `POST` | `/api/v1/borrow-requests/:id/review`| อนุมัติหรือปฏิเสธคำขอ (`APPROVED`/`REJECTED`) | `IT_ADMIN`, `SUPER_ADMIN` |
+| `POST` | `/api/v1/borrow-requests/:id/handover`| สแกนส่งมอบอุปกรณ์ บันทึกภาพถ่ายและ Checklist | `IT_ADMIN`, `SUPER_ADMIN` |
+| `POST` | `/api/v1/borrow-requests/:id/return`| ตรวจรับคืนอุปกรณ์ บันทึกสภาพ และคำนวณค่าปรับ | `IT_ADMIN`, `SUPER_ADMIN` |
+| **Analytics & KPIs** | | | |
+| `GET` | `/api/v1/analytics/dashboard`| สรุปตัวเลข KPI ภาพรวมระดับผู้บริหาร | Authenticated |
+| `GET` | `/api/v1/analytics/my-stats` | สรุปสถิติการยืมของพนักงานที่เข้าสู่ระบบ | Authenticated |
+| **Audit Trail** | | | |
+| `GET` | `/api/v1/audit-logs` | ดึงประวัติกิจกรรมการแก้ไขในระบบ | `IT_ADMIN`, `SUPER_ADMIN` |
+| **User & RBAC Management** | | | |
+| `GET` | `/api/v1/users` | ดึงรายชื่อผู้ใช้งานทั้งหมด | `IT_ADMIN`, `SUPER_ADMIN` |
+| `POST` | `/api/v1/users/:id/grant-role`| เลื่อนขั้น/ปรับลดสิทธิ์ผู้ใช้ (`EMPLOYEE`, `IT_ADMIN`, `SUPER_ADMIN`) | `SUPER_ADMIN` |
+| `POST` | `/api/v1/users/:id/status` | เปิดใช้งานหรือระงับสิทธิ์บัญชีผู้ใช้ | `SUPER_ADMIN` |

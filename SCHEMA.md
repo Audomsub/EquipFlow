@@ -1,12 +1,15 @@
 # EquipFlow Database Schema & SQL Reference Guide
 
-เอกสารระบุรายละเอียด Schema ทั้งหมดของ PostgreSQL บน Supabase รวมถึง Table Constraints, Enums, Foreign Keys, Triggers, และ Indexes
+เอกสารระบุรายละเอียด Schema ทั้งหมดของ PostgreSQL บน Supabase รวมถึง Table Constraints, Enums, Foreign Keys, Triggers, Indexes, และ Dynamic Schema Engine (JSONB)
 
 ---
 
-## 🗄️ Custom Enum Types
+## 🗄️ Custom Enum Types & Extensions
 
 ```sql
+-- เปิดใช้งาน Extension สำหรับ Date Range Overlap Exclusion Constraints
+CREATE EXTENSION IF NOT EXISTS btree_gist;
+
 -- บทบาทผู้ใช้งาน
 CREATE TYPE user_role_enum AS ENUM ('EMPLOYEE', 'IT_ADMIN', 'SUPER_ADMIN');
 
@@ -45,12 +48,15 @@ CREATE TABLE public.profiles (
 ```
 
 ### 2. `public.categories`
-หมวดหมู่อุปกรณ์ (เช่น Laptops, Workstations, Displays, Tablets, Networking)
+หมวดหมู่อุปกรณ์ รองรับ Dynamic Schema สำหรับแบบฟอร์มขอยืม (`required_form_fields`) และรายการตรวจสภาพ (`checklist_template`)
 ```sql
 CREATE TABLE public.categories (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     name TEXT NOT NULL UNIQUE,
     description TEXT,
+    icon TEXT DEFAULT 'box',
+    required_form_fields JSONB DEFAULT '[]'::jsonb,
+    checklist_template JSONB DEFAULT '[]'::jsonb,
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 ```
@@ -68,19 +74,19 @@ CREATE TABLE public.locations (
 ```
 
 ### 4. `public.assets`
-ตารางทะเบียนทรัพย์สินไอที (รองรับอุปกรณ์ 2,000+ รายการ)
+คลังทะเบียนทรัพย์สินและอุปกรณ์ IT ขององค์กร
 ```sql
 CREATE TABLE public.assets (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     asset_tag TEXT NOT NULL UNIQUE,
-    serial_number TEXT,
+    serial_number TEXT UNIQUE,
     name TEXT NOT NULL,
     model TEXT,
     brand TEXT,
     category_id UUID REFERENCES public.categories(id) ON DELETE SET NULL,
     location_id UUID REFERENCES public.locations(id) ON DELETE SET NULL,
     status asset_status_enum NOT NULL DEFAULT 'AVAILABLE',
-    current_condition condition_status_enum NOT NULL DEFAULT 'EXCELLENT',
+    current_condition condition_status_enum NOT NULL DEFAULT 'GOOD',
     image_url TEXT,
     specifications JSONB DEFAULT '{}'::jsonb,
     notes TEXT,
@@ -88,54 +94,73 @@ CREATE TABLE public.assets (
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
-
--- Index สำหรับค้นหาแบบ Instant Search
-CREATE INDEX idx_assets_search ON public.assets(asset_tag, name, brand, model);
-CREATE INDEX idx_assets_status ON public.assets(status);
 ```
 
 ### 5. `public.borrow_requests`
-รายการคำขอยืมอุปกรณ์ และช่วงเวลาการจอง
+รายการคำขอยืมและจองอุปกรณ์ พร้อมเก็บข้อมูลเฉพาะหมวดหมู่ (`request_data`)
 ```sql
 CREATE TABLE public.borrow_requests (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     request_number TEXT NOT NULL UNIQUE,
-    user_id UUID NOT NULL REFERENCES public.profiles(id) ON DELETE RESTRICT,
-    asset_id UUID NOT NULL REFERENCES public.assets(id) ON DELETE RESTRICT,
+    user_id UUID NOT NULL REFERENCES public.profiles(id) ON DELETE CASCADE,
+    asset_id UUID NOT NULL REFERENCES public.assets(id) ON DELETE CASCADE,
     purpose TEXT NOT NULL,
+    request_data JSONB DEFAULT '{}'::jsonb,
     start_date TIMESTAMPTZ NOT NULL,
     end_date TIMESTAMPTZ NOT NULL,
     status request_status_enum NOT NULL DEFAULT 'PENDING',
-    reviewed_by UUID REFERENCES public.profiles(id),
+    reviewed_by UUID REFERENCES public.profiles(id) ON DELETE SET NULL,
     reviewed_at TIMESTAMPTZ,
     rejection_reason TEXT,
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    CONSTRAINT valid_dates CHECK (end_date > start_date)
 );
-
--- Index สำหรับ Double-Booking Detection
-CREATE INDEX idx_borrow_dates ON public.borrow_requests(asset_id, start_date, end_date, status);
 ```
 
-### 6. `public.asset_transactions`
-บันทึกการส่งมอบและตรวจรับคืน พร้อมภาพถ่ายจาก Supabase Storage และค่าปรับ
+### 6. `public.borrow_transactions`
+บันทึกการส่งมอบ (Handover) และรับคืน (Return) ตรวจสภาพอุปกรณ์ ถ่ายภาพ และประเมินค่าปรับ
 ```sql
-CREATE TABLE public.asset_transactions (
+CREATE TABLE public.borrow_transactions (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-    borrow_request_id UUID NOT NULL REFERENCES public.borrow_requests(id) ON DELETE CASCADE,
-    transaction_type transaction_type_enum NOT NULL,
-    inspector_id UUID NOT NULL REFERENCES public.profiles(id),
-    condition condition_status_enum NOT NULL,
-    notes TEXT,
-    photos JSONB DEFAULT '[]'::jsonb,
+    request_id UUID NOT NULL UNIQUE REFERENCES public.borrow_requests(id) ON DELETE CASCADE,
+    asset_id UUID NOT NULL REFERENCES public.assets(id) ON DELETE CASCADE,
+    handed_over_by UUID NOT NULL REFERENCES public.profiles(id) ON DELETE CASCADE,
+    handover_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    handover_condition condition_status_enum NOT NULL,
+    handover_notes TEXT,
+    handover_photos TEXT[] DEFAULT ARRAY[]::TEXT[],
+    handover_checklist_results JSONB DEFAULT '[]'::jsonb,
+
+    received_by UUID REFERENCES public.profiles(id) ON DELETE SET NULL,
+    received_at TIMESTAMPTZ,
+    return_condition condition_status_enum,
+    return_notes TEXT,
+    return_photos TEXT[] DEFAULT ARRAY[]::TEXT[],
+    return_checklist_results JSONB DEFAULT '[]'::jsonb,
     is_damaged BOOLEAN NOT NULL DEFAULT false,
-    damage_fine_amount NUMERIC(10,2) DEFAULT 0.00,
+    damage_fine_amount NUMERIC(10,2) NOT NULL DEFAULT 0.00,
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 ```
 
-### 7. `public.audit_logs`
-บันทึกประวัติการเปลี่ยนแปลงระบบ (Immutable Audit Trail)
+### 7. `public.notifications`
+การแจ้งเตือน Realtime In-app สำหรับผู้ใช้งานเมื่อสถานะคำขอเปลี่ยนแปลง
+```sql
+CREATE TABLE public.notifications (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    user_id UUID NOT NULL REFERENCES public.profiles(id) ON DELETE CASCADE,
+    title TEXT NOT NULL,
+    message TEXT NOT NULL,
+    type TEXT NOT NULL DEFAULT 'INFO',
+    is_read BOOLEAN NOT NULL DEFAULT false,
+    link TEXT,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+```
+
+### 8. `public.audit_logs`
+บันทึกประวัติการกระทำสำคัญทั้งหมดในระบบ (Enterprise Audit Trail)
 ```sql
 CREATE TABLE public.audit_logs (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -146,7 +171,6 @@ CREATE TABLE public.audit_logs (
     old_data JSONB,
     new_data JSONB,
     ip_address TEXT,
-    user_agent TEXT,
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 ```
@@ -155,31 +179,26 @@ CREATE TABLE public.audit_logs (
 
 ## ⚡ Database Triggers
 
-### Auto Profile Creation Trigger (`handle_new_user`)
+### 1. Auto-create Profile on Supabase User Signup
 ```sql
 CREATE OR REPLACE FUNCTION public.handle_new_user()
-RETURNS trigger AS $$
+RETURNS TRIGGER AS $$
 BEGIN
-  INSERT INTO public.profiles (id, email, full_name, role, is_active, created_at, updated_at)
+  INSERT INTO public.profiles (id, email, full_name, role)
   VALUES (
     NEW.id,
     NEW.email,
     COALESCE(NEW.raw_user_meta_data->>'full_name', split_part(NEW.email, '@', 1)),
-    COALESCE((NEW.raw_user_meta_data->>'role')::user_role_enum, 'EMPLOYEE'),
-    true,
-    NOW(),
-    NOW()
+    COALESCE((NEW.raw_user_meta_data->>'role')::user_role_enum, 'EMPLOYEE'::user_role_enum)
   )
-  ON CONFLICT (id) DO UPDATE
-  SET 
-    full_name = EXCLUDED.full_name,
+  ON CONFLICT (id) DO UPDATE SET
     email = EXCLUDED.email,
-    updated_at = NOW();
+    full_name = EXCLUDED.full_name;
   RETURN NEW;
 END;
 $$ LANGUAGE plpgsql SECURITY DEFINER;
 
-CREATE TRIGGER on_auth_user_created
+CREATE OR REPLACE TRIGGER on_auth_user_created
   AFTER INSERT ON auth.users
   FOR EACH ROW EXECUTE FUNCTION public.handle_new_user();
 ```

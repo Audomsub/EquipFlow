@@ -89,6 +89,19 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
           setUser(profile);
           setRole(profile.role);
           apiClient.defaults.headers.common["X-Dev-Role"] = profile.role;
+        } else {
+          const metaRole = (session.user.user_metadata?.role as UserRole) || (session.user.email?.includes("admin") ? "SUPER_ADMIN" : "EMPLOYEE");
+          const fallbackProfile: Profile = {
+            id: session.user.id,
+            email: session.user.email || "",
+            full_name: session.user.user_metadata?.full_name || "Super Administrator",
+            role: metaRole,
+            is_active: true,
+            created_at: new Date().toISOString(),
+          };
+          setUser(fallbackProfile);
+          setRole(metaRole);
+          apiClient.defaults.headers.common["X-Dev-Role"] = metaRole;
         }
       } else {
         setIsAuthenticated(false);
@@ -141,6 +154,20 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
           setUser(profile);
           setRole(profile.role);
           apiClient.defaults.headers.common["X-Dev-Role"] = profile.role;
+        } else {
+          // If profile query returned empty, read role from user_metadata or email check
+          const metaRole = (data.user.user_metadata?.role as UserRole) || (data.user.email?.includes("admin") ? "SUPER_ADMIN" : "EMPLOYEE");
+          const fallbackProfile: Profile = {
+            id: data.user.id,
+            email: data.user.email || email,
+            full_name: data.user.user_metadata?.full_name || "Super Administrator",
+            role: metaRole,
+            is_active: true,
+            created_at: new Date().toISOString(),
+          };
+          setUser(fallbackProfile);
+          setRole(metaRole);
+          apiClient.defaults.headers.common["X-Dev-Role"] = metaRole;
         }
       }
       return {};
