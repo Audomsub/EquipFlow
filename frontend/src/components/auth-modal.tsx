@@ -176,20 +176,6 @@ export function AuthModal({ isOpen, onClose, initialMode = "LOGIN" }: AuthModalP
             </div>
           </div>
 
-          {mode === "REGISTER" && (
-            <div>
-              <label className="block text-xs font-bold text-slate-700 mb-1.5">บทบาทที่ต้องการ (Designated Role)</label>
-              <select
-                value={targetRole}
-                onChange={(e) => setTargetRole(e.target.value as UserRole)}
-                className="w-full bg-slate-50 border border-slate-200 rounded-xl p-2.5 text-xs text-slate-800 focus:outline-none focus:ring-2 focus:ring-emerald-500/20 focus:border-emerald-500 font-medium"
-              >
-                <option value="EMPLOYEE">EMPLOYEE (พนักงานทั่วไป - สิทธิ์ขอยืมและดูประวัติ)</option>
-                <option value="IT_ADMIN">IT_ADMIN (ผู้ดูแลอุปกรณ์ IT - อนุมัติ ส่งมอบ ตรวจรับคืน)</option>
-              </select>
-            </div>
-          )}
-
           <button
             type="submit"
             disabled={isLoading}

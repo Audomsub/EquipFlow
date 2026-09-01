@@ -141,21 +141,6 @@ export default function RegisterPage() {
             </div>
           </div>
 
-          <div>
-            <label className="block text-xs font-bold text-slate-700 mb-1.5">
-              บทบาทที่ต้องการเริ่มต้น (Requested Role)
-            </label>
-            <select
-              value={targetRole}
-              onChange={(e) => setTargetRole(e.target.value as UserRole)}
-              className="w-full bg-slate-50 border border-slate-200 rounded-xl p-2.5 text-xs text-slate-800 focus:outline-none focus:ring-2 focus:ring-emerald-500/20 focus:border-emerald-500 font-medium"
-            >
-              <option value="EMPLOYEE">EMPLOYEE (พนักงานทั่วไป - จองยืมและดูประวัติของตนเอง)</option>
-              <option value="IT_ADMIN">IT_ADMIN (เจ้าหน้าที่ IT - จัดการอุปกรณ์ ตรวจสอบ ส่งมอบ)</option>
-              <option value="SUPER_ADMIN">SUPER_ADMIN (ผู้ดูแลระบบสูงสุด - มอบสิทธิ์และจัดการผู้ใช้)</option>
-            </select>
-          </div>
-
           <button
             type="submit"
             disabled={isSubmitting || isLoading}
